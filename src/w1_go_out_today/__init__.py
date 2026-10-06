@@ -1,2 +1,4 @@
+from .forecast import run_forecast_evaluation
+
 def main() -> None:
-    print("Hello from w1-go-out-today!")
+    run_forecast_evaluation()
