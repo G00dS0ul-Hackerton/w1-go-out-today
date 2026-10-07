@@ -7,6 +7,30 @@ A local, voice-first morning brief that tells people in Lagos the best time toda
 
 This repository is managed with `uv` (Python 3.12), and includes `pytest` and `ruff`.
 
+Copy `.env.example` to `.env` and configure your settings:
+- `TABPFN_TOKEN`: Your TabPFN token (required on Windows to avoid browser prompt).
+- `OLLAMA_BASE_URL`: Ollama API endpoint (default: `http://localhost:11434`).
+- `OLLAMA_MODEL`: Chosen Ollama model (default: `qwen2.5:7b`).
+
+## Morning Brief (Forecast + Outdoor Plan)
+
+To generate the 12-hour forecast table and plain-language outdoor plan:
+```bash
+uv run w1-go-out-today
+```
+
+Options:
+- `--activity <activity>`: Custom outdoor activity (default: `"a walk"`), e.g. `--activity "run"` or `--activity "errands"`.
+- `--issue-time <timestamp>`: Specify forecast issue time (default: latest 06:00 in historical dataset), e.g. `--issue-time "2026-09-30 06:00"`.
+
+### Prompt & Guard
+
+The prompt template lives in [`prompts/plan.txt`](prompts/plan.txt). The model response is checked by an automated output guard ensuring:
+1. Every numerical value mentioned appears in the forecast.
+2. The phrase "will rain" is never used ("chance of rain" is enforced).
+3. The response is strictly 2 to 3 sentences long.
+If the guard fails, it retries once with the model before falling back to a deterministic template.
+
 ## Data Processing
 
 To download historical hourly weather data for Lagos from scratch, run:
@@ -26,12 +50,17 @@ During the data fetch step, any hourly rows containing missing values (`null`) f
 
 To evaluate the TabPFN model (predicting rain probability and temperature per hour) and compare it against climatology and persistence baselines, run:
 ```bash
-uv run w1-go-out-today
+uv run w1-go-out-today --eval
 ```
 
 To run the slower `n_estimators=10` execution for comparison against the default `n_estimators=2` output:
 ```bash
-uv run w1-go-out-today --compare
+uv run w1-go-out-today --eval --compare
+```
+
+To run the sample-size check on 1,000, 3,000, and 5,000 training rows:
+```bash
+uv run w1-go-out-today --sample-size-check
 ```
 
 ### Metrics (Holdout: 2026-09-01 to 2026-09-30)

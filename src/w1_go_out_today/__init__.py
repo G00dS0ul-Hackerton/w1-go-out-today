@@ -1,4 +1,3 @@
-from .forecast import run_forecast_evaluation
+from .cli import main
 
-def main() -> None:
-    run_forecast_evaluation()
+__all__ = ["main"]

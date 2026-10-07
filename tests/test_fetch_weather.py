@@ -12,10 +12,10 @@ def test_clean_weather_data_drops_nulls_and_keeps_timezone_correctly():
         data = json.load(f)
 
     df = clean_weather_data(data)
-    
+
     # Should drop index 1 (null precipitation) and 2 (null temperature), leaving 2 rows.
     assert len(df) == 2
-    
+
     # Time strings "2023-10-01T00:00" will be parsed correctly
     times = df["time"].tolist()
     assert times[0] == pd.Timestamp("2023-10-01T00:00")

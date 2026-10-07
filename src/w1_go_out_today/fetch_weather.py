@@ -17,19 +17,19 @@ def clean_weather_data(data: dict[str, Any]) -> pd.DataFrame:
         raise ValueError("No hourly data found in response")
 
     df = pd.DataFrame(hourly_data)
-    
+
     if "time" in df.columns:
         # Open-Meteo returns strings. We parse them so we have proper datetime types.
         # Open-Meteo provides these in the requested timezone (Africa/Lagos).
         df["time"] = pd.to_datetime(df["time"])
-    
+
     initial_rows = len(df)
     df = df.dropna()
     final_rows = len(df)
-    
+
     dropped_count = initial_rows - final_rows
     print(f"Dropped {dropped_count} rows due to missing values.")
-    
+
     return df
 
 
@@ -63,7 +63,7 @@ def main() -> None:
 
     data_dir = Path("data")
     data_dir.mkdir(exist_ok=True)
-    
+
     output_path = data_dir / "lagos_weather.csv"
     df.to_csv(output_path, index=False)
     print(f"Saved {len(df)} rows to {output_path}")
