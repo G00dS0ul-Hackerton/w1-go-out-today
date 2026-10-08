@@ -49,7 +49,7 @@
             <header class="header">
                 <h1 class="header__title" id="greeting">Good morning, Lagos</h1>
                 <p class="header__metadata" id="honestyBanner"></p>
-                <p class="header__evening" id="eveningNote" hidden>Tomorrow’s brief builds at 05:45</p>
+                <div class="header__evening-pill" id="eveningNote" hidden>Tomorrow’s brief builds at 05:45</div>
 
                 <!-- Weather Cloud badge carrying temp & rain % -->
                 <div class="weather-cloud-badge" id="weatherCloud" hidden>
@@ -57,9 +57,9 @@
                         <path d="M30,70 A20,20 0 0,1 50,40 A35,35 0 0,1 110,30 A30,30 0 0,1 160,50 A22,22 0 0,1 175,70 Z" fill="#ffffff" filter="drop-shadow(0 4px 12px rgba(0,0,0,0.08))"/>
                     </svg>
                     <div class="weather-cloud-content">
-                        <span class="wc-temp" id="wcTemp">--°C</span>
+                        <span class="wc-temp" id="wcTemp"><span class="shimmer-placeholder"></span></span>
                         <span class="wc-dot">·</span>
-                        <span class="wc-rain" id="wcRain">--%</span>
+                        <span class="wc-rain" id="wcRain"><span class="shimmer-placeholder"></span></span>
                     </div>
                 </div>
             </header>
@@ -72,6 +72,7 @@
                         <span class="play-btn__icon" id="playIcon">&#9654;</span>
                         <span class="play-btn__dot dot--ready" id="statusDot"></span>
                     </button>
+                    <button class="stop-btn" id="stopBtn" aria-label="Stop brief" hidden title="Stop brief">⏹ Stop</button>
                 </div>
 
                 <!-- Activity chips (including 🧺 Picnic and 🎉 Hangout) -->

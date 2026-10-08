@@ -401,6 +401,22 @@ def validate_plan_output(text: str, facts: dict) -> tuple[bool, str]:
         if not has_avoid_term:
             return False, "Failed to address the window to avoid."
 
+    # Constraint (g): Reject whole-day claims
+    whole_day_phrases = [
+        "rest of the day",
+        "throughout the day",
+        "all day",
+        "whole day",
+        "entire day",
+    ]
+    lower_text = stripped.lower()
+    for phrase in whole_day_phrases:
+        if phrase in lower_text:
+            return (
+                False,
+                f"Unsubstantiated whole-day claim '{phrase}' detected; name specific windows instead.",
+            )
+
     # Constraint (a): Every number in text must come from facts block
     valid_nums = extract_fact_numbers(facts)
     for num_str in found_nums:
@@ -438,7 +454,12 @@ def generate_fallback_template(facts: dict, activity: str = "a walk") -> str:
         dc_end = format_hour_12h(dc["end"])
         dc_rain = dc["rain_max"]
         sentence1 = f"Hang your clothes out between {dc_start} and {dc_end} with at most {dc_rain}% chance of rain."
-        if aw:
+        if aw and dc.get("take_in_time"):
+            ti_12 = format_hour_12h(dc["take_in_time"])
+            sentence2 = (
+                f"Bring them inside by {ti_12} to avoid rain chances rising later."
+            )
+        elif aw:
             aw_start = format_hour_12h(aw["start"])
             aw_end = format_hour_12h(aw["end"])
             aw_rain = aw["rain_max"]
@@ -447,7 +468,9 @@ def generate_fallback_template(facts: dict, activity: str = "a walk") -> str:
             ti_12 = format_hour_12h(dc["take_in_time"])
             sentence2 = f"Bring them inside by {ti_12} before rain chances rise."
         else:
-            sentence2 = f"Rain chances stay low under {dc_rain}% throughout the rest of the day."
+            sentence2 = (
+                f"Conditions remain suitable with low rain risk around {dc_rain}%."
+            )
         return f"{sentence1} {sentence2}"
 
     sentence1 = f"The best time for {activity} is between {bw_start} and {bw_end} with at most {bw_rain_max}% chance of rain."
@@ -463,7 +486,9 @@ def generate_fallback_template(facts: dict, activity: str = "a walk") -> str:
             f"Avoid being outside during peak heat around {', '.join(heat_strs)}."
         )
     else:
-        sentence2 = f"Rain chances stay low under {bw_rain_max}% throughout the rest of the day."
+        sentence2 = (
+            f"Rain chances stay low under {bw_rain_max}% through the forecast window."
+        )
 
     return f"{sentence1} {sentence2}"
 

@@ -379,4 +379,40 @@ def test_fallback_no_filler_sentences(sample_forecast_df):
     facts["avoid_window"] = None
     template = generate_fallback_template(facts, activity="a walk")
     assert "Conditions remain mild" not in template
-    assert "Rain chances stay low" in template
+
+
+def test_validate_plan_output_rejects_whole_day_claim(sample_forecast_df):
+    facts = compute_forecast_facts(sample_forecast_df, activity="a walk")
+    # sample_forecast_df has rain probabilities reaching 81% and varies across hours.
+    # Text addresses best window and avoid window, but falsely claims low rain for the rest of the day:
+    text_with_whole_day_claim = (
+        "The best time for a walk is between 4 pm and 6 pm with at most 37% chance of rain. "
+        "Avoid being outside between 10 am and 2 pm due to an 81% chance of rain. "
+        "Rain chances stay low throughout the rest of the day."
+    )
+    is_valid, msg = validate_plan_output(text_with_whole_day_claim, facts)
+    assert is_valid is False
+    assert (
+        "whole-day" in msg.lower()
+        or "rest of the day" in msg.lower()
+        or "all day" in msg.lower()
+    )
+
+
+def test_fallback_template_does_not_make_whole_day_claims(sample_forecast_df):
+    facts = compute_forecast_facts(sample_forecast_df, activity="a walk")
+    facts["avoid_window"] = None
+    template = generate_fallback_template(facts, activity="a walk")
+    assert "throughout the rest of the day" not in template.lower()
+    assert "all day" not in template.lower()
+    is_valid, msg = validate_plan_output(template, facts)
+    assert is_valid is True, f"Fallback template failed guard: {msg}"
+
+
+def test_dry_clothes_uses_longest_dry_and_bring_in(sample_forecast_df):
+    facts = compute_forecast_facts(sample_forecast_df, activity="dry clothes")
+    template = generate_fallback_template(facts, activity="dry clothes")
+    assert "bring" in template.lower() or "avoid" in template.lower()
+    assert "throughout the rest of the day" not in template.lower()
+    is_valid, msg = validate_plan_output(template, facts)
+    assert is_valid is True, f"Dry clothes template failed guard: {msg}"

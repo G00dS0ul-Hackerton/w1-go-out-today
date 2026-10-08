@@ -55,7 +55,24 @@ def test_brief_starts_pipeline(client, monkeypatch):
 
     response = client.post("/brief", json={"activity": "football"})
     assert response.status_code == 200
-    assert response.json() == {"status": "started"}
+    assert response.json().get("status") == "started"
+
+
+def test_activity_brief_switching_and_caching(client, monkeypatch):
+    # If pipeline is currently running for 'a walk', a new request for 'dry clothes'
+    # must NOT be rejected with 'already_running'; it must cancel or supersede the old
+    # task and accept 'dry clothes' with status 'started' or 'cached'.
+    monkeypatch.setitem(_state, "pipeline_running", True)
+    monkeypatch.setitem(_state, "current_activity", "a walk")
+    mock_run = AsyncMock()
+    monkeypatch.setattr("w1_go_out_today.server._run_pipeline", mock_run)
+
+    response = client.post(
+        "/brief", json={"activity": "dry clothes", "request_id": "req-123"}
+    )
+    assert response.status_code == 200
+    assert response.json().get("status") in ("started", "cached")
+    assert response.json().get("status") != "already_running"
 
 
 def test_events_stream_header(client, monkeypatch):

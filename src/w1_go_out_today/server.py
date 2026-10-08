@@ -34,7 +34,10 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 _state: dict[str, Any] = {
     "forecast_cache": {},  # {issue_time_str: {"fcst_df_records": [...], "facts": {...}}}
     "trained_models": None,  # {"clf": ..., "reg": ..., "feats": ...}
+    "brief_cache": {},  # {f"{issue_time_str}:{activity}": {"plan_text": ..., "audio_file": ..., ...}}
     "last_brief": None,  # {"plan_text": ..., "audio_file": ..., "fallback_note": ...}
+    "current_activity": "a walk",
+    "current_request_id": None,
     "pipeline_running": False,
     "current_step": "idle",
     "forecast_ready": False,
@@ -44,6 +47,7 @@ _state: dict[str, Any] = {
 
 # Keep strong references to background tasks to prevent GC
 _active_tasks: set[asyncio.Task] = set()
+_active_pipeline_task: asyncio.Task | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -107,14 +111,23 @@ def _write_disk_cache(issue_time_str: str, data: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _run_pipeline(activity: str) -> None:
+async def _run_pipeline(activity: str, request_id: str | None = None) -> None:
     """Run the full brief pipeline in the background, broadcasting SSE events."""
     import pandas as pd
 
+    from w1_go_out_today.plan import compute_forecast_facts
+
     _state["pipeline_running"] = True
+    _state["current_activity"] = activity
+    _state["current_request_id"] = request_id
     _state["plan_ready"] = False
     _state["audio_ready"] = False
-    _state["last_brief"] = None
+
+    async def emit(event_type: str, data: dict) -> None:
+        data["activity"] = activity
+        if request_id:
+            data["request_id"] = request_id
+        await _hub.broadcast(event_type, data)
 
     try:
         # --- Step 1-3: Forecast (check cache first) -----------------------
@@ -145,32 +158,35 @@ async def _run_pipeline(activity: str) -> None:
         if cached is not None:
             logger.info("Forecast cache hit for %s", issue_time_str)
             _state["forecast_ready"] = True
-            await _hub.broadcast("progress", {"step": "reading_sky", "status": "done"})
-            await _hub.broadcast("progress", {"step": "tabpfn", "status": "done"})
-            await _hub.broadcast(
+            fcst_records = cached["fcst_df_records"]
+            fcst_df = pd.DataFrame(fcst_records)
+            facts = compute_forecast_facts(fcst_df, activity=activity)
+
+            await emit("progress", {"step": "reading_sky", "status": "done"})
+            await emit("progress", {"step": "tabpfn", "status": "done"})
+            await emit(
                 "forecast_ready",
                 {
-                    "forecast": cached["fcst_df_records"],
-                    "facts": cached["facts"],
+                    "forecast": fcst_records,
+                    "facts": facts,
                     "data_up_to": cached.get("data_up_to", ""),
                     "issue_time": issue_time_str,
+                    "forecast_cached": True,
                 },
             )
         else:
             # Step 1: Fetch live weather
-            await _hub.broadcast(
-                "progress", {"step": "reading_sky", "status": "running"}
-            )
+            await emit("progress", {"step": "reading_sky", "status": "running"})
             _state["current_step"] = "reading_sky"
 
             from w1_go_out_today.live_weather import fetch_live_weather
 
             live_df = await asyncio.to_thread(fetch_live_weather)
             logger.info("Fetched %d live weather rows", len(live_df))
-            await _hub.broadcast("progress", {"step": "reading_sky", "status": "done"})
+            await emit("progress", {"step": "reading_sky", "status": "done"})
 
             # Step 2: TabPFN forecast
-            await _hub.broadcast("progress", {"step": "tabpfn", "status": "running"})
+            await emit("progress", {"step": "tabpfn", "status": "running"})
             _state["current_step"] = "tabpfn"
 
             # Train on CSV
@@ -218,11 +234,7 @@ async def _run_pipeline(activity: str) -> None:
                 forecast, live_df, issue_time, 12, clf, reg, feats
             )
 
-            # Compute facts for timeline
-            from w1_go_out_today.plan import compute_forecast_facts
-
             facts = compute_forecast_facts(fcst_df, activity=activity)
-
             fcst_records = fcst_df.to_dict(orient="records")
 
             cache_entry = {
@@ -235,27 +247,38 @@ async def _run_pipeline(activity: str) -> None:
             _write_disk_cache(issue_time_str, cache_entry)
 
             _state["forecast_ready"] = True
-            await _hub.broadcast("progress", {"step": "tabpfn", "status": "done"})
-            await _hub.broadcast(
+            await emit("progress", {"step": "tabpfn", "status": "done"})
+            await emit(
                 "forecast_ready",
                 {
                     "forecast": fcst_records,
                     "facts": facts,
                     "data_up_to": data_up_to,
                     "issue_time": issue_time_str,
+                    "forecast_cached": False,
                 },
             )
 
+        # Check brief cache for this activity
+        brief_cache_key = f"{issue_time_str}:{activity}"
+        if brief_cache_key in _state["brief_cache"]:
+            logger.info("Brief cache hit for %s", brief_cache_key)
+            cached_brief = dict(_state["brief_cache"][brief_cache_key])
+            cached_brief["activity"] = activity
+            if request_id:
+                cached_brief["request_id"] = request_id
+            _state["plan_ready"] = True
+            _state["audio_ready"] = cached_brief.get("audio_file") is not None
+            _state["last_brief"] = cached_brief
+            _state["current_step"] = "done"
+            await emit("progress", {"step": "plan", "status": "done"})
+            await emit("progress", {"step": "voice", "status": "done"})
+            await emit("brief_ready", cached_brief)
+            return
+
         # --- Step 3: Plan text ---------------------------------------------
-        await _hub.broadcast("progress", {"step": "plan", "status": "running"})
+        await emit("progress", {"step": "plan", "status": "running"})
         _state["current_step"] = "plan"
-
-        fcst_records = cached["fcst_df_records"] if cached else fcst_records
-        facts = cached["facts"] if cached else facts
-
-        import pandas as pd
-
-        fcst_df = pd.DataFrame(fcst_records)
 
         fallback_note = None
         try:
@@ -273,7 +296,6 @@ async def _run_pipeline(activity: str) -> None:
             )
         except SystemExit:
             from w1_go_out_today.plan import (
-                compute_forecast_facts,
                 generate_fallback_template,
             )
 
@@ -284,10 +306,10 @@ async def _run_pipeline(activity: str) -> None:
             fallback_note = "Local model offline"
 
         _state["plan_ready"] = True
-        await _hub.broadcast("progress", {"step": "plan", "status": "done"})
+        await emit("progress", {"step": "plan", "status": "done"})
 
         # --- Step 4: Voice -------------------------------------------------
-        await _hub.broadcast("progress", {"step": "voice", "status": "running"})
+        await emit("progress", {"step": "voice", "status": "running"})
         _state["current_step"] = "voice"
 
         audio_file = None
@@ -311,7 +333,7 @@ async def _run_pipeline(activity: str) -> None:
                 fallback_note = "Voice skipped"
 
         _state["audio_ready"] = audio_file is not None
-        await _hub.broadcast("progress", {"step": "voice", "status": "done"})
+        await emit("progress", {"step": "voice", "status": "done"})
 
         # --- Done -----------------------------------------------------------
         if audio_file is None and fallback_note is None:
@@ -322,17 +344,24 @@ async def _run_pipeline(activity: str) -> None:
             "audio_file": audio_file,
             "fallback_note": fallback_note,
             "timings": timings,
+            "activity": activity,
+            "request_id": request_id,
         }
+        _state["brief_cache"][brief_cache_key] = brief
         _state["last_brief"] = brief
         _state["current_step"] = "done"
-        await _hub.broadcast("brief_ready", brief)
+        await emit("brief_ready", brief)
 
+    except asyncio.CancelledError:
+        logger.info("Pipeline cancelled for activity %s", activity)
+        raise
     except Exception as exc:
         logger.exception("Pipeline error")
         _state["current_step"] = "error"
-        await _hub.broadcast("error", {"message": str(exc)})
+        await emit("error", {"message": str(exc)})
     finally:
-        _state["pipeline_running"] = False
+        if _state.get("current_activity") == activity:
+            _state["pipeline_running"] = False
 
 
 # ---------------------------------------------------------------------------
@@ -353,12 +382,14 @@ async def get_status():
         "audio_ready": _state["audio_ready"],
         "pipeline_running": _state["pipeline_running"],
         "current_step": _state["current_step"],
+        "current_activity": _state["current_activity"],
     }
 
 
 @app.get("/events")
 async def sse_events(request: Request):
     q = _hub.subscribe()
+    activity = request.query_params.get("activity")
 
     async def event_generator():
         try:
@@ -369,12 +400,22 @@ async def sse_events(request: Request):
                     "forecast_ready": _state["forecast_ready"],
                     "pipeline_running": _state["pipeline_running"],
                     "current_step": _state["current_step"],
+                    "current_activity": _state.get("current_activity"),
                 },
             )
 
-            # If brief is already done, send it immediately
-            if _state["last_brief"] is not None:
-                yield _sse_format("brief_ready", _state["last_brief"])
+            # If matching brief is already done, send it immediately
+            issue_time_str = next(iter(_state["forecast_cache"].keys()), None)
+            target_brief = None
+            if activity and issue_time_str:
+                target_brief = _state["brief_cache"].get(f"{issue_time_str}:{activity}")
+            if target_brief is None and _state.get("last_brief"):
+                lb = _state["last_brief"]
+                if not activity or lb.get("activity") == activity:
+                    target_brief = lb
+
+            if target_brief is not None:
+                yield _sse_format("brief_ready", target_brief)
                 return
 
             while True:
@@ -382,7 +423,15 @@ async def sse_events(request: Request):
                     break
                 try:
                     msg = await asyncio.wait_for(q.get(), timeout=15.0)
-                    yield _sse_format(msg["event"], msg["data"])
+                    data = msg["data"]
+                    if (
+                        activity
+                        and isinstance(data, dict)
+                        and data.get("activity")
+                        and data["activity"] != activity
+                    ):
+                        continue
+                    yield _sse_format(msg["event"], data)
                     if msg["event"] in ("brief_ready", "error"):
                         break
                 except TimeoutError:
@@ -414,17 +463,53 @@ async def get_forecast():
 
 @app.post("/brief")
 async def start_brief(request: Request):
+    global _active_pipeline_task
     body = await request.json()
     activity = body.get("activity", "a walk")
+    request_id = body.get("request_id")
 
-    if _state["pipeline_running"]:
-        return {"status": "already_running"}
+    issue_time_str = next(iter(_state["forecast_cache"].keys()), None)
+    brief_cache_key = f"{issue_time_str}:{activity}" if issue_time_str else None
 
-    task = asyncio.create_task(_run_pipeline(activity))
+    if brief_cache_key and brief_cache_key in _state["brief_cache"]:
+        cached_brief = dict(_state["brief_cache"][brief_cache_key])
+        cached_brief["activity"] = activity
+        if request_id:
+            cached_brief["request_id"] = request_id
+        _state["current_activity"] = activity
+        _state["current_request_id"] = request_id
+        _state["last_brief"] = cached_brief
+        _state["pipeline_running"] = False
+        _state["current_step"] = "done"
+
+        await _hub.broadcast(
+            "progress", {"step": "reading_sky", "status": "done", "activity": activity}
+        )
+        await _hub.broadcast(
+            "progress", {"step": "tabpfn", "status": "done", "activity": activity}
+        )
+        await _hub.broadcast(
+            "progress", {"step": "plan", "status": "done", "activity": activity}
+        )
+        await _hub.broadcast(
+            "progress", {"step": "voice", "status": "done", "activity": activity}
+        )
+        await _hub.broadcast("brief_ready", cached_brief)
+        return {"status": "cached", "activity": activity}
+
+    if _active_pipeline_task and not _active_pipeline_task.done():
+        _active_pipeline_task.cancel()
+
+    _state["pipeline_running"] = True
+    _state["current_activity"] = activity
+    _state["current_request_id"] = request_id
+
+    task = asyncio.create_task(_run_pipeline(activity, request_id))
+    _active_pipeline_task = task
     _active_tasks.add(task)
     task.add_done_callback(_active_tasks.discard)
 
-    return {"status": "started"}
+    return {"status": "started", "activity": activity}
 
 
 def _append_outside_log(activity: str, note: str) -> None:

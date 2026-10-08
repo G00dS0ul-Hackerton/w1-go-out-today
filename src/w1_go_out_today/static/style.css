@@ -30,9 +30,9 @@
     --sky-top: #0f172a;
     --sky-bottom: #1e1b4b;
     --sun-moon-fill: #f1f5f9;
-    --text-primary: #f8fafc;
-    --waveform-bar: #cbd5e1;
-    --chip-active-bg: rgba(255, 255, 255, 0.2);
+    --text-primary: #f1f5f9;
+    --waveform-bar: #38bdf8;
+    --chip-active-bg: rgba(255, 255, 255, 0.25);
 }
 
 * {
@@ -108,19 +108,20 @@ body {
     50% { opacity: 0.9; transform: scale(1.3); }
 }
 
-/* Drifting Clouds */
+/* Drifting Clouds - positioned away from header to prevent overlaps */
 .cloud-layer {
     position: absolute;
-    top: 0;
+    top: 16vh;
     left: 0;
     width: 100%;
-    height: 45vh;
+    height: 32vh;
     pointer-events: none;
     overflow: hidden;
     z-index: 1;
     color: rgba(255, 255, 255, 0.85);
     transition: color 1s ease;
 }
+
 
 .drift-cloud {
     position: absolute;
@@ -172,35 +173,42 @@ body {
 /* App Content Layout */
 .app-content {
     position: relative;
-    z-index: 5;
-    max-width: 600px;
+    z-index: 10;
+    max-width: 760px;
     margin: 0 auto;
-    padding: 2.5rem 1.25rem;
+    padding: 1.5rem 1rem 110px 1rem;
     text-align: center;
 }
 
 /* Header */
 .header__title {
     font-size: 1.75rem;
-    font-weight: 300;
-    margin: 0 0 6px 0;
+    font-weight: 600;
+    margin: 0 0 4px 0;
     letter-spacing: -0.5px;
 }
 
 .header__metadata {
     font-size: 0.85rem;
-    opacity: 0.75;
+    opacity: 0.85;
     margin: 0 0 4px 0;
 }
 
-.header__evening {
+.header__evening-pill {
     font-size: 0.8rem;
     font-weight: 600;
     background: rgba(255, 255, 255, 0.25);
     display: inline-block;
-    padding: 3px 10px;
-    border-radius: 12px;
-    margin: 6px 0 12px 0;
+    padding: 4px 12px;
+    border-radius: 9999px;
+    margin: 4px auto 8px auto;
+    backdrop-filter: blur(6px);
+}
+
+.sky-night .header__evening-pill {
+    background: rgba(241, 245, 249, 0.15);
+    color: #f1f5f9;
+    border: 1px solid rgba(241, 245, 249, 0.25);
 }
 
 /* Weather Cloud Badge */
@@ -209,17 +217,19 @@ body {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 200px;
-    height: 90px;
-    margin: 10px auto 0 auto;
+    width: auto;
+    min-width: 160px;
+    height: 46px;
+    padding: 0 20px;
+    margin: 6px auto 0 auto;
+    background: rgba(255, 255, 255, 0.92);
+    border-radius: 9999px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
     animation: bobCloud 5s ease-in-out infinite;
 }
 
 .weather-cloud-svg {
-    position: absolute;
-    width: 100%;
-    height: 100%;
-    z-index: 1;
+    display: none;
 }
 
 .weather-cloud-content {
@@ -228,10 +238,25 @@ body {
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 1.15rem;
+    font-size: 1.05rem;
     font-weight: 700;
     color: #1e293b;
-    padding-top: 14px;
+    padding-top: 0;
+}
+
+.shimmer-placeholder {
+    display: inline-block;
+    width: 44px;
+    height: 18px;
+    border-radius: 4px;
+    background: linear-gradient(90deg, #e2e8f0 25%, #f8fafc 50%, #e2e8f0 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
 }
 
 @keyframes bobCloud {
@@ -244,8 +269,9 @@ body {
     position: relative;
     width: 160px;
     height: 160px;
-    margin: 1.5rem auto 1rem auto;
+    margin: 1rem auto 0.5rem auto;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
 }
@@ -273,7 +299,12 @@ body {
     align-items: center;
     justify-content: center;
     outline: none;
-    transition: transform 0.15s ease-out;
+    transition: transform 0.15s ease-out, box-shadow 0.2s;
+}
+
+.sky-night .play-btn {
+    box-shadow: 0 0 24px rgba(241, 245, 249, 0.35), inset 0 0 0 2px rgba(241, 245, 249, 0.7);
+    border-color: #f1f5f9;
 }
 
 .play-btn:active {
@@ -310,37 +341,86 @@ body {
     50% { transform: scale(1.3); opacity: 0.6; }
 }
 
-/* Activity Chips */
+.stop-btn {
+    position: relative;
+    z-index: 2;
+    margin-top: 6px;
+    padding: 4px 12px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    border-radius: 12px;
+    border: 1px solid currentColor;
+    background: rgba(239, 68, 68, 0.25);
+    color: inherit;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.15s;
+}
+
+.stop-btn:hover {
+    background: rgba(239, 68, 68, 0.4);
+    transform: scale(1.05);
+}
+
+/* Activity Chips (2 rows of 4, uniform width) */
 .chips {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
     gap: 8px;
-    flex-wrap: wrap;
-    justify-content: center;
-    margin: 1.25rem auto;
-    max-width: 440px;
+    width: 100%;
+    max-width: 760px;
+    margin: 1rem auto 0.5rem auto;
 }
 
 .chip {
-    padding: 8px 14px;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 4px;
     border-radius: 20px;
     border: 1px solid currentColor;
-    background: transparent;
+    background: rgba(255, 255, 255, 0.2);
     color: inherit;
     cursor: pointer;
-    font-size: 0.88rem;
-    transition: transform 200ms ease-out, background 200ms ease-out;
+    font-size: 0.85rem;
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    transition: opacity 0.2s, background 0.2s, transform 0.15s;
     outline: none;
+    white-space: nowrap;
 }
 
-.chip:hover {
-    transform: scale(1.04);
+.chip:hover:not(:disabled) {
+    transform: scale(1.03);
 }
 
 .chip--active {
     background: var(--chip-active-bg);
-    transform: scale(1.06);
+    border-color: currentColor;
     font-weight: 600;
 }
+
+.chip--disabled {
+    opacity: 0.4 !important;
+    cursor: not-allowed !important;
+    pointer-events: none !important;
+}
+
+.chip-spinner {
+    width: 8px;
+    height: 8px;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 50%;
+    display: inline-block;
+    animation: chipSpin 0.7s linear infinite;
+}
+
+@keyframes chipSpin {
+    to { transform: rotate(360deg); }
+}
+
 
 /* Steps: Completed Chips Row */
 .progress-chips {
@@ -542,40 +622,64 @@ body {
 
 /* Captions & Word Synchronization */
 .brief {
-    max-width: 440px;
-    margin: 1.5rem auto 1rem auto;
+    max-width: 600px;
+    margin: 1rem auto 0.75rem auto;
 }
 
 .brief__captions {
     font-size: 1.15rem;
     line-height: 1.6;
     min-height: 3.2rem;
+    white-space: pre-wrap;
 }
 
 .caption-word {
-    display: inline-block;
-    opacity: 0.5;
-    transition: opacity 0.15s, transform 0.15s, color 0.15s;
+    display: inline;
+    white-space: pre-wrap;
+    opacity: 0.65;
+    transition: opacity 0.15s, color 0.15s;
 }
 
 .caption-word.word--spoken {
-    opacity: 0.85;
+    opacity: 0.9;
 }
 
 .caption-word.word--active {
     opacity: 1;
     color: #0284c7;
     font-weight: 700;
-    transform: scale(1.08);
 }
 
 .sky-sunset .caption-word.word--active {
     color: #fbbf24;
 }
 
+.sky-night .caption-word {
+    color: #f1f5f9;
+    opacity: 0.55; /* Unread caption words at 55% opacity, not dark */
+}
+
+.sky-night .caption-word.word--spoken {
+    opacity: 0.85;
+    color: #f1f5f9;
+}
+
 .sky-night .caption-word.word--active {
     color: #38bdf8;
+    opacity: 1;
+    font-weight: 700;
 }
+
+.sky-night .timeline__label {
+    color: #f1f5f9;
+    opacity: 0.85;
+}
+
+.sky-night .chip {
+    color: #f1f5f9;
+    border-color: rgba(241, 245, 249, 0.35);
+}
+
 
 .caption-sentence {
     display: inline;
@@ -668,7 +772,7 @@ body {
     left: 0;
     width: 100vw;
     height: 90px;
-    z-index: 2;
+    z-index: 1;
     pointer-events: none;
 }
 
@@ -701,19 +805,30 @@ body {
     50% { transform: skewX(6deg); }
 }
 
-/* Character Stage & Animated Actors */
+/* Character Stage & Animated Actors (~2x size) */
 .character-stage {
     position: fixed;
-    bottom: 35px;
+    bottom: 25px;
     left: 0;
     width: 100vw;
-    height: 80px;
+    height: 140px;
     pointer-events: none;
-    z-index: 3;
+    z-index: 2;
 }
 
 .activity-actor {
     position: absolute;
+}
+
+.sky-night .activity-actor svg {
+    filter: drop-shadow(0 0 2.5px rgba(241, 245, 249, 0.85));
+}
+.sky-night .activity-actor line,
+.sky-night .activity-actor path {
+    stroke: #f1f5f9;
+}
+.sky-night .activity-actor circle {
+    fill: #f1f5f9;
 }
 
 .character--celebrating {
@@ -725,16 +840,28 @@ body {
     50% { transform: translateY(-18px) rotate(-4deg); }
 }
 
-/* Walk Actor */
+/* Walk Actor with articulated limbs */
 .actor-walk {
     animation: walkAcross 20s linear infinite;
 }
+.actor-walk .arm-left {
+    transform-origin: 44px 38px;
+    animation: armSwing 1s ease-in-out infinite alternate;
+}
+.actor-walk .arm-right {
+    transform-origin: 56px 38px;
+    animation: armSwing 1s ease-in-out infinite alternate-reverse;
+}
+@keyframes armSwing {
+    from { transform: rotate(-25deg); }
+    to { transform: rotate(25deg); }
+}
 .actor-walk .leg-left {
-    transform-origin: 30px 52px;
+    transform-origin: 46px 70px;
     animation: stride 1s ease-in-out infinite alternate;
 }
 .actor-walk .leg-right {
-    transform-origin: 30px 52px;
+    transform-origin: 54px 70px;
     animation: stride 1s ease-in-out infinite alternate-reverse;
 }
 
@@ -744,9 +871,10 @@ body {
 }
 
 @keyframes walkAcross {
-    0% { transform: translateX(-80px); }
+    0% { transform: translateX(-120px); }
     100% { transform: translateX(105vw); }
 }
+
 
 /* Run Actor */
 .actor-run {
