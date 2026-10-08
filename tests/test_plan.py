@@ -350,3 +350,33 @@ def test_guard_rejects_best_window_understated_rain(sample_forecast_df):
     is_valid, msg = validate_plan_output(understated_text, facts)
     assert is_valid is False
     assert "15" in msg
+
+
+def test_dry_clothes_facts_and_template(sample_forecast_df):
+    facts = compute_forecast_facts(sample_forecast_df, activity="dry clothes")
+    assert facts["dry_clothes"] is not None
+    assert "start" in facts["dry_clothes"]
+    assert "end" in facts["dry_clothes"]
+    template = generate_fallback_template(facts, activity="dry clothes")
+    assert "Hang your clothes" in template
+    assert "Conditions remain mild" not in template
+    is_valid, msg = validate_plan_output(template, facts)
+    assert is_valid is True, f"Dry clothes template failed guard: {msg}"
+
+
+def test_picnic_and_hangout_activities(sample_forecast_df):
+    for act in ("picnic", "hangout"):
+        facts = compute_forecast_facts(sample_forecast_df, activity=act)
+        template = generate_fallback_template(facts, activity=act)
+        assert act in template
+        is_valid, msg = validate_plan_output(template, facts)
+        assert is_valid is True, f"Template for {act} failed guard: {msg}"
+
+
+def test_fallback_no_filler_sentences(sample_forecast_df):
+    # Even when avoid window is removed from facts
+    facts = compute_forecast_facts(sample_forecast_df, activity="a walk")
+    facts["avoid_window"] = None
+    template = generate_fallback_template(facts, activity="a walk")
+    assert "Conditions remain mild" not in template
+    assert "Rain chances stay low" in template

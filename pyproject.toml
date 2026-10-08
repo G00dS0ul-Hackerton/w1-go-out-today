@@ -9,11 +9,14 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "elevenlabs>=2.71.0",
+    "fastapi>=0.115.0",
+    "httpx>=0.28.0",
     "pandas>=3.0.6",
     "python-dotenv>=1.2.4",
     "scikit-learn>=1.5.0",
     "tabpfn>=2.0.0",
     "torch>=2.0.0",
+    "uvicorn[standard]>=0.34.0",
 ]
 
 [project.scripts]

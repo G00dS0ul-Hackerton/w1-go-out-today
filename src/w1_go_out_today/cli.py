@@ -111,7 +111,7 @@ def main() -> None:
         "--activity",
         type=str,
         default="a walk",
-        help="Outdoor activity to plan for (default: 'a walk')",
+        help="Outdoor activity to plan for (e.g. 'a walk', 'a run', 'football', 'market', 'dry clothes', 'commute', 'picnic', 'hangout')",
     )
     parser.add_argument(
         "--no-voice",
@@ -123,8 +123,74 @@ def main() -> None:
         action="store_true",
         help="Open/play the audio file after generating",
     )
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="Start the web UI at http://localhost:8000",
+    )
+    parser.add_argument(
+        "--prebuild",
+        action="store_true",
+        help="Pre-build the brief for instant playback and exit",
+    )
 
     args = parser.parse_args()
+
+    if args.serve:
+        import uvicorn
+
+        from w1_go_out_today.server import app
+
+        uvicorn.run(app, host="127.0.0.1", port=8000)
+        return
+
+    if args.prebuild:
+        import json
+        from pathlib import Path
+
+        from w1_go_out_today.live_weather import fetch_live_weather
+        from w1_go_out_today.plan import compute_forecast_facts
+
+        print("Running pre-build pipeline with live weather...")
+        live_df = fetch_live_weather()
+        live_df["time"] = pd.to_datetime(live_df["time"])
+        six_am_rows = live_df[live_df["time"].dt.hour == 6]
+        if len(six_am_rows) > 0:
+            issue_time = six_am_rows["time"].max()
+        else:
+            issue_time = live_df["time"].max()
+
+        csv_path = "data/lagos_weather.csv"
+        csv_df = pd.read_csv(csv_path)
+        csv_df["time"] = pd.to_datetime(csv_df["time"])
+        df_pairs = prepare_data(csv_df, n=12, is_training=True)
+        df_train, df_test, df_pre_test = get_splits(df_pairs, train_size=3000)
+        clf, reg, feats, *_ = train_and_evaluate(
+            df_train, df_test, df_pre_test, n_estimators=2, quiet=True
+        )
+
+        fcst = forecast(live_df, issue_time, n=12, clf=clf, reg=reg, features=feats)
+        facts = compute_forecast_facts(fcst, activity="a walk")
+
+        cache_dir = Path("data/cache")
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        slug = str(issue_time).replace(" ", "_").replace(":", "-")
+        cache_file = cache_dir / f"forecast_{slug}.json"
+        cache_data = {
+            "fcst_df_records": fcst.to_dict(orient="records"),
+            "facts": facts,
+            "issue_time": str(issue_time),
+        }
+        cache_file.write_text(json.dumps(cache_data, indent=2), encoding="utf-8")
+        print(f"Cached forecast to {cache_file}")
+
+        plan_text = get_outdoor_plan(fcst, activity="a walk")
+        print(f"Plan generated: {plan_text}")
+        audio_path = generate_voice(plan_text, no_voice=args.no_voice)
+        if audio_path:
+            print(f"Prebuild audio cached to {audio_path}")
+        print("Pre-build complete.")
+        return
 
     # Route evaluation requests directly to forecast evaluation logic
     if args.eval or args.sample_size_check:

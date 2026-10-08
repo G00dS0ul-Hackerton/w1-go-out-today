@@ -163,13 +163,58 @@ def compute_forecast_facts(fcst_df: pd.DataFrame, activity: str = "a walk") -> d
     else:
         heat_desc = "- Heat hours (>=32°C): None"
 
-    facts_block = f"{best_desc}\n{avoid_desc}\n{heat_desc}"
+    # 4. Activity-specific facts for dry clothes
+    dry_clothes_info = None
+    dry_desc = ""
+    if "dry clothes" in activity.lower():
+        dry_runs = []
+        curr = []
+        for p in parsed:
+            if p["rain"] <= 20:
+                curr.append(p)
+            else:
+                if curr:
+                    dry_runs.append(curr)
+                    curr = []
+        if curr:
+            dry_runs.append(curr)
+
+        if dry_runs:
+            longest_dry = max(dry_runs, key=len)
+        else:
+            longest_dry = best_run
+
+        dry_start = longest_dry[0]["time"]
+        dry_end = longest_dry[-1]["time"]
+        dry_rain_max = max(x["rain"] for x in longest_dry)
+
+        take_in_time = None
+        for p in parsed:
+            if p["time"] > dry_start and p["rain"] >= 40:
+                take_in_time = p["time"]
+                break
+
+        dry_clothes_info = {
+            "start": dry_start,
+            "end": dry_end,
+            "rain_max": dry_rain_max,
+            "take_in_time": take_in_time,
+        }
+        dc_s12 = format_hour_12h(dry_start)
+        dc_e12 = format_hour_12h(dry_end)
+        dry_desc = f"\n- Recommended clothes drying window: {dc_s12} to {dc_e12} (chance of rain: at most {dry_rain_max}%)"
+        if take_in_time:
+            ti_12 = format_hour_12h(take_in_time)
+            dry_desc += f", take in by {ti_12}"
+
+    facts_block = f"{best_desc}\n{avoid_desc}\n{heat_desc}{dry_desc}".strip()
 
     return {
         "best_window": best_window,
         "avoid_window": avoid_window,
         "heat_hours": heat_hours,
         "has_heat_hours": has_heat_hours,
+        "dry_clothes": dry_clothes_info,
         "facts_block": facts_block,
     }
 
@@ -211,6 +256,25 @@ def extract_fact_numbers(facts: dict) -> set[float]:
                     pass
         if "rain_max" in aw:
             valid_nums.add(float(aw["rain_max"]))
+
+    # Dry clothes window: start, end, take_in_time, and rain_max
+    dc = facts.get("dry_clothes")
+    if dc:
+        for t_str in (
+            dc.get("start", ""),
+            dc.get("end", ""),
+            dc.get("take_in_time") or "",
+        ):
+            if ":" in t_str:
+                parts = t_str.split(":")
+                try:
+                    h24 = int(parts[0])
+                    valid_nums.add(float(h24))
+                    valid_nums.add(float(h24 % 12 or 12))
+                except ValueError:
+                    pass
+        if "rain_max" in dc:
+            valid_nums.add(float(dc["rain_max"]))
 
     # Heat hours: 32.0 and hours (24h and 12h)
     if facts.get("has_heat_hours"):
@@ -264,7 +328,7 @@ def is_sentence_fragment(sentence: str) -> bool:
         r"would|should|may|might|must|reach|reaches|reached|stay|stays|stayed|start|"
         r"starts|started|fall|falls|fell|rise|rises|rose|make|makes|made|avoid|avoids|"
         r"avoided|expect|expects|expected|provide|provides|provided|offer|offers|offered|"
-        r"bring|brings|brought|head|heads|run|runs|ran|walk|walks|walked)\b"
+        r"bring|brings|brought|head|heads|run|runs|ran|walk|walks|walked|hang|hangs|hung|dry|dries|dried)\b"
     )
     return not bool(re.search(verb_pattern, s_clean, re.IGNORECASE))
 
@@ -368,6 +432,24 @@ def generate_fallback_template(facts: dict, activity: str = "a walk") -> str:
     bw_end = format_hour_12h(bw["end"])
     bw_rain_max = bw["rain_max"]
 
+    if "dry clothes" in activity.lower() and facts.get("dry_clothes"):
+        dc = facts["dry_clothes"]
+        dc_start = format_hour_12h(dc["start"])
+        dc_end = format_hour_12h(dc["end"])
+        dc_rain = dc["rain_max"]
+        sentence1 = f"Hang your clothes out between {dc_start} and {dc_end} with at most {dc_rain}% chance of rain."
+        if aw:
+            aw_start = format_hour_12h(aw["start"])
+            aw_end = format_hour_12h(aw["end"])
+            aw_rain = aw["rain_max"]
+            sentence2 = f"Avoid leaving clothes outside between {aw_start} and {aw_end} due to a {aw_rain}% chance of rain."
+        elif dc.get("take_in_time"):
+            ti_12 = format_hour_12h(dc["take_in_time"])
+            sentence2 = f"Bring them inside by {ti_12} before rain chances rise."
+        else:
+            sentence2 = f"Rain chances stay low under {dc_rain}% throughout the rest of the day."
+        return f"{sentence1} {sentence2}"
+
     sentence1 = f"The best time for {activity} is between {bw_start} and {bw_end} with at most {bw_rain_max}% chance of rain."
 
     if aw:
@@ -381,9 +463,7 @@ def generate_fallback_template(facts: dict, activity: str = "a walk") -> str:
             f"Avoid being outside during peak heat around {', '.join(heat_strs)}."
         )
     else:
-        sentence2 = (
-            "Conditions remain mild and manageable throughout the rest of the day."
-        )
+        sentence2 = f"Rain chances stay low under {bw_rain_max}% throughout the rest of the day."
 
     return f"{sentence1} {sentence2}"
 
@@ -393,6 +473,7 @@ def call_ollama(
     base_url: str | None = None,
     model: str | None = None,
     timeout: int = 120,
+    keep_alive: str = "1m",
 ) -> str:
     """
     Call Ollama /api/generate endpoint.
@@ -411,7 +492,7 @@ def call_ollama(
         "model": model,
         "prompt": prompt,
         "stream": False,
-        "keep_alive": "1m",
+        "keep_alive": keep_alive,
         "options": {
             "temperature": 0.3,
             "seed": 42,
@@ -464,6 +545,7 @@ def get_outdoor_plan(
     model: str | None = None,
     prompt_path: str = DEFAULT_PROMPT_PATH,
     timeout: int = 120,
+    keep_alive: str = "1m",
 ) -> str:
     """
     Generate outdoor plan text:
@@ -482,14 +564,16 @@ def get_outdoor_plan(
     )
 
     # Attempt 1
-    raw_response = call_ollama(prompt, base_url=base_url, model=model, timeout=timeout)
+    raw_response = call_ollama(
+        prompt, base_url=base_url, model=model, timeout=timeout, keep_alive=keep_alive
+    )
     is_valid, _ = validate_plan_output(raw_response, facts)
     if is_valid:
         return raw_response
 
     # Attempt 2 (Retry once)
     raw_response_retry = call_ollama(
-        prompt, base_url=base_url, model=model, timeout=timeout
+        prompt, base_url=base_url, model=model, timeout=timeout, keep_alive=keep_alive
     )
     is_valid_retry, _ = validate_plan_output(raw_response_retry, facts)
     if is_valid_retry:

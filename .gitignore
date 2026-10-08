@@ -7,3 +7,5 @@ audio/
 *.mp3
 *.wav
 *.part
+data/outside_log.csv
+data/cache/

@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Go Out Today?</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="sky-container sky-day" id="skyContainer">
+        <!-- Celestial body (Sun/Moon arc) -->
+        <div class="celestial-body" id="celestialBody" aria-hidden="true"></div>
+
+        <!-- Night stars overlay -->
+        <svg id="nightStars" class="stars-overlay" viewBox="0 0 1000 600" preserveAspectRatio="none" aria-hidden="true">
+            <circle cx="150" cy="80" r="1.5" class="star star-1" fill="#fff" />
+            <circle cx="320" cy="140" r="1.2" class="star star-2" fill="#fff" />
+            <circle cx="580" cy="60" r="1.8" class="star star-3" fill="#fff" />
+            <circle cx="780" cy="110" r="1.4" class="star star-1" fill="#fff" />
+            <circle cx="890" cy="70" r="1.6" class="star star-2" fill="#fff" />
+            <circle cx="450" cy="180" r="1.1" class="star star-3" fill="#fff" />
+        </svg>
+
+        <!-- Drifting clouds -->
+        <div id="cloudLayer" class="cloud-layer" aria-hidden="true">
+            <div class="drift-cloud cloud-slow">
+                <svg viewBox="0 0 120 60" width="160" height="80">
+                    <path d="M20,45 A15,15 0 0,1 35,25 A25,25 0 0,1 75,20 A20,20 0 0,1 100,45 Z" fill="currentColor"/>
+                </svg>
+            </div>
+            <div class="drift-cloud cloud-fast">
+                <svg viewBox="0 0 120 60" width="130" height="65">
+                    <path d="M20,45 A15,15 0 0,1 35,25 A25,25 0 0,1 75,20 A20,20 0 0,1 100,45 Z" fill="currentColor"/>
+                </svg>
+            </div>
+        </div>
+
+        <!-- Falling raindrops (active when rain > 60%) -->
+        <div id="rainContainer" class="rain-container" hidden aria-hidden="true">
+            <div class="rain-drop drop-1"></div>
+            <div class="rain-drop drop-2"></div>
+            <div class="rain-drop drop-3"></div>
+            <div class="rain-drop drop-4"></div>
+            <div class="rain-drop drop-5"></div>
+            <div class="rain-drop drop-6"></div>
+        </div>
+
+        <div class="app-content">
+            <header class="header">
+                <h1 class="header__title" id="greeting">Good morning, Lagos</h1>
+                <p class="header__metadata" id="honestyBanner"></p>
+                <p class="header__evening" id="eveningNote" hidden>Tomorrow’s brief builds at 05:45</p>
+
+                <!-- Weather Cloud badge carrying temp & rain % -->
+                <div class="weather-cloud-badge" id="weatherCloud" hidden>
+                    <svg viewBox="0 0 200 100" class="weather-cloud-svg" aria-hidden="true">
+                        <path d="M30,70 A20,20 0 0,1 50,40 A35,35 0 0,1 110,30 A30,30 0 0,1 160,50 A22,22 0 0,1 175,70 Z" fill="#ffffff" filter="drop-shadow(0 4px 12px rgba(0,0,0,0.08))"/>
+                    </svg>
+                    <div class="weather-cloud-content">
+                        <span class="wc-temp" id="wcTemp">--°C</span>
+                        <span class="wc-dot">·</span>
+                        <span class="wc-rain" id="wcRain">--%</span>
+                    </div>
+                </div>
+            </header>
+
+            <main class="main">
+                <!-- Play button with circular canvas waveform -->
+                <div class="play-btn-wrapper">
+                    <canvas class="waveform-canvas" id="waveformCanvas" width="160" height="160" aria-hidden="true"></canvas>
+                    <button class="play-btn" id="playBtn" aria-label="Play brief">
+                        <span class="play-btn__icon" id="playIcon">&#9654;</span>
+                        <span class="play-btn__dot dot--ready" id="statusDot"></span>
+                    </button>
+                </div>
+
+                <!-- Activity chips (including 🧺 Picnic and 🎉 Hangout) -->
+                <div class="chips" id="chips">
+                    <button class="chip" data-activity="a walk">🚶 Walk</button>
+                    <button class="chip" data-activity="a run">🏃 Run</button>
+                    <button class="chip" data-activity="football">⚽ Football</button>
+                    <button class="chip" data-activity="market">🛒 Market</button>
+                    <button class="chip" data-activity="dry clothes">👕 Dry clothes</button>
+                    <button class="chip" data-activity="commute">🚌 Commute</button>
+                    <button class="chip" data-activity="picnic">🧺 Picnic</button>
+                    <button class="chip" data-activity="hangout">🎉 Hangout</button>
+                </div>
+
+                <!-- Steps: Top row of completed checkmark chips -->
+                <div class="progress-chips" id="progressChips" hidden>
+                    <span class="chip-check" id="chip-reading_sky" hidden>✓ Sky read</span>
+                    <span class="chip-check" id="chip-tabpfn" hidden>✓ Forecast ready</span>
+                    <span class="chip-check" id="chip-plan" hidden>✓ Plan written</span>
+                    <span class="chip-check" id="chip-voice" hidden>✓ Voice recorded</span>
+                </div>
+
+                <!-- Big single active step card -->
+                <div class="active-step-container" id="activeStepContainer" hidden>
+                    <div class="step-card" id="stepCard">
+                        <div class="step-icon-large" id="stepIcon">☁️</div>
+                        <div class="step-label-large" id="stepLabel">Reading the sky…</div>
+                    </div>
+                </div>
+
+                <!-- 12-hour Timeline -->
+                <div class="timeline" id="timeline" hidden></div>
+
+                <!-- Brief & Word-by-Word Synchronized Captions -->
+                <div class="brief" id="brief" hidden>
+                    <div class="brief__captions" id="captionsContainer"></div>
+                    <p class="brief__note" id="briefNote"></p>
+                </div>
+
+                <!-- "I went outside" interaction -->
+                <div class="outside" id="outside" hidden>
+                    <button class="outside__btn" id="outsideBtn">I went outside ✅</button>
+                    <div class="outside__form" id="outsideForm" hidden>
+                        <input class="outside__input" id="outsideNote" type="text" placeholder="How was it?" maxlength="140">
+                        <button class="outside__submit" id="outsideSubmit">Log it</button>
+                    </div>
+                    <p class="outside__confirm" id="outsideConfirm" hidden>✅ Logged!</p>
+                </div>
+            </main>
+        </div>
+
+        <!-- Character Stage on Grass -->
+        <div class="character-stage" id="characterStage" aria-hidden="true"></div>
+
+        <!-- Swaying Grass Ground Strip -->
+        <div class="grass-ground" id="grassGround" aria-hidden="true">
+            <svg viewBox="0 0 1200 90" preserveAspectRatio="none" class="grass-svg">
+                <defs>
+                    <path id="bladeCluster" d="M10,90 Q15,40 18,20 Q20,40 24,90 M20,90 Q28,30 35,15 Q36,45 42,90 M38,90 Q48,25 55,22 Q52,50 60,90" fill="#22c55e" />
+                </defs>
+                <rect x="0" y="70" width="1200" height="20" fill="#16a34a" />
+                <g class="sway-group sway-1">
+                    <use href="#bladeCluster" x="0" />
+                    <use href="#bladeCluster" x="150" />
+                    <use href="#bladeCluster" x="300" />
+                    <use href="#bladeCluster" x="450" />
+                    <use href="#bladeCluster" x="600" />
+                    <use href="#bladeCluster" x="750" />
+                    <use href="#bladeCluster" x="900" />
+                    <use href="#bladeCluster" x="1050" />
+                </g>
+                <g class="sway-group sway-2">
+                    <use href="#bladeCluster" x="70" />
+                    <use href="#bladeCluster" x="220" />
+                    <use href="#bladeCluster" x="370" />
+                    <use href="#bladeCluster" x="520" />
+                    <use href="#bladeCluster" x="670" />
+                    <use href="#bladeCluster" x="820" />
+                    <use href="#bladeCluster" x="970" />
+                </g>
+            </svg>
+        </div>
+
+        <!-- Floating Timeline Tooltip -->
+        <div class="timeline-tooltip" id="timelineTooltip" role="tooltip" aria-hidden="true"></div>
+    </div>
+
+    <script src="/static/app.js" defer></script>
+</body>
+</html>

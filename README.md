@@ -47,6 +47,28 @@ The prompt template lives in [`prompts/plan.txt`](prompts/plan.txt). The model r
 4. No 24-hour colon time formats (like `16:00`) are used in speech.
 If the guard fails, it retries once with the model before falling back to a deterministic voice-friendly template.
 
+## Web UI
+
+Start the local web page:
+```bash
+uv run w1-go-out-today --serve
+```
+Open http://localhost:8000, pick your activity, press play.
+
+### Pre-build for instant playback
+```bash
+uv run w1-go-out-today --prebuild
+```
+Runs the full pipeline (live weather → TabPFN → plan → voice) and caches the result. Schedule at 05:45 with Windows Task Scheduler for instant playback at 06:00.
+
+### Live weather data
+When using `--serve` or `--prebuild`, recent weather is fetched from the Open-Meteo forecast API (`past_days=2`). These recent hours are model data, not station observations.
+
+"Demo day: Sep 30" is available via the CLI:
+```bash
+uv run w1-go-out-today --issue-time "2026-09-30 06:00" --no-voice
+```
+
 ## Data Processing
 
 To download historical hourly weather data for Lagos from scratch, run:
