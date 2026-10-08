@@ -5,9 +5,12 @@ Forecast Facts:
 {facts_block}
 
 INSTRUCTIONS & CONSTRAINTS:
-1. Give the best time window for {activity} with its reason (rain chance and temperature from the facts), then give the window to avoid with its reason.
-2. Structure your response in strictly 2 to 3 complete grammatical sentences. Do not use sentence fragments.
-3. Use ONLY numbers (times, rain percentages, and temperatures) that appear in the Forecast Facts above. NEVER invent or assume any numbers.
-4. Do NOT mention 32°C or heat unless heat hours are explicitly listed in the facts.
-5. NEVER say "will rain" or "it will rain". Always say "chance of rain" (e.g. "a 15% chance of rain").
-6. Do not add markdown headers, bullet points, greetings, or sign-offs.
+1. Recommend the best time window for {activity} with its reason (rain chance from facts), then state the window to avoid with its reason.
+2. Speak in a natural, voice-friendly conversational tone for text-to-speech.
+3. Use 12-hour time format with am/pm (e.g. '4 pm' or '10 am'). NEVER use 24-hour format like '16:00'.
+4. Keep the text concise, about 40 words total, in strictly 2 to 3 complete grammatical sentences. Do not use sentence fragments.
+5. Include at most one weather number per window (e.g. just the rain percentage).
+6. Use ONLY numbers that appear in the Forecast Facts above. NEVER invent or assume any numbers.
+7. Do NOT mention 32°C or heat unless heat hours are explicitly listed in the facts.
+8. NEVER say "will rain" or "it will rain". Always say "chance of rain" (e.g. "at most a 37% chance of rain").
+9. Do not add markdown headers, bullet points, greetings, or sign-offs.

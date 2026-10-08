@@ -23,6 +23,20 @@ def load_prompt(prompt_path: str = DEFAULT_PROMPT_PATH) -> str:
         return f.read()
 
 
+def format_hour_12h(time_str: str) -> str:
+    """Convert '16:00' to '4 pm', '06:00' to '6 am', '12:00' to '12 pm', '00:00' to '12 am'."""
+    try:
+        parts = time_str.split(":")
+        h = int(parts[0])
+        suffix = "am" if h < 12 else "pm"
+        h12 = h % 12
+        if h12 == 0:
+            h12 = 12
+        return f"{h12} {suffix}"
+    except (ValueError, IndexError):
+        return time_str
+
+
 def compute_forecast_facts(fcst_df: pd.DataFrame, activity: str = "a walk") -> dict:
     """
     Compute structured facts from the forecast so the LLM does not need to do reasoning:
@@ -30,6 +44,7 @@ def compute_forecast_facts(fcst_df: pd.DataFrame, activity: str = "a walk") -> d
       If no hours <= 40%, pick single hour with lowest rain chance.
     - window to avoid: contiguous run of hours with rain chance >= 60%.
     - heat hours: hours with temperature >= 32.0°C.
+    Formatted voice-friendly in 12-hour format ('4 pm') with at most one weather number per window.
     """
     if fcst_df.empty:
         return {
@@ -130,32 +145,21 @@ def compute_forecast_facts(fcst_df: pd.DataFrame, activity: str = "a walk") -> d
     heat_hours = [p["time"] for p in parsed if p["temp"] >= 32.0]
     has_heat_hours = len(heat_hours) > 0
 
-    # Build facts block text
-    if best_rain_min == best_rain_max:
-        rain_str = f"{best_rain_min}%"
-    else:
-        rain_str = f"{best_rain_min}% to {best_rain_max}%"
-
-    if best_temp_min == best_temp_max:
-        temp_str = f"{best_temp_min:.1f}°C"
-    else:
-        temp_str = f"{best_temp_min:.1f}°C to {best_temp_max:.1f}°C"
-
-    best_desc = f"- Best window for {activity}: {best_start} to {best_end} (chance of rain: {rain_str}, temperature: {temp_str})"
+    # Build voice-friendly facts block text (12-hour format, <=1 number per window)
+    bw_start_12 = format_hour_12h(best_start)
+    bw_end_12 = format_hour_12h(best_end)
+    best_desc = f"- Best window for {activity}: {bw_start_12} to {bw_end_12} (chance of rain: at most {best_rain_max}%)"
 
     if avoid_window:
-        if avoid_window["rain_min"] == avoid_window["rain_max"]:
-            avoid_rain_str = f"{avoid_window['rain_min']}%"
-        else:
-            avoid_rain_str = (
-                f"{avoid_window['rain_min']}% to {avoid_window['rain_max']}%"
-            )
-        avoid_desc = f"- Window to avoid: {avoid_window['start']} to {avoid_window['end']} (chance of rain: {avoid_rain_str})"
+        aw_start_12 = format_hour_12h(avoid_start)
+        aw_end_12 = format_hour_12h(avoid_end)
+        avoid_desc = f"- Window to avoid: {aw_start_12} to {aw_end_12} (chance of rain: {avoid_rain_max}%)"
     else:
         avoid_desc = "- Window to avoid: None"
 
     if has_heat_hours:
-        heat_desc = f"- Heat hours (>=32°C): {', '.join(heat_hours)}"
+        heat_hours_12 = [format_hour_12h(h) for h in heat_hours]
+        heat_desc = f"- Heat hours (>=32°C): {', '.join(heat_hours_12)}"
     else:
         heat_desc = "- Heat hours (>=32°C): None"
 
@@ -173,55 +177,53 @@ def compute_forecast_facts(fcst_df: pd.DataFrame, activity: str = "a walk") -> d
 def extract_fact_numbers(facts: dict) -> set[float]:
     """
     Extract ONLY the numbers present in the facts block.
+    Maps 24h hours to both 24h and 12h numbers (e.g. 16:00 -> 16.0 and 4.0).
     Does NOT include 32.0 unless heat hours exist.
     """
     valid_nums: set[float] = {0.0}
 
-    # Best window
+    # Best window: start, end (24h and 12h), and rain_max
     bw = facts.get("best_window")
     if bw:
-        for r in bw.get("rows", []):
-            t_str = r["time"]
+        for t_str in (bw.get("start", ""), bw.get("end", "")):
             if ":" in t_str:
                 parts = t_str.split(":")
-                for p in parts:
-                    try:
-                        valid_nums.add(float(int(p)))
-                    except ValueError:
-                        pass
-            rain_val = float(r["rain"])
-            valid_nums.add(rain_val)
-            temp_val = float(r["temp"])
-            valid_nums.add(temp_val)
-            valid_nums.add(float(round(temp_val)))
-            valid_nums.add(float(int(temp_val)))
+                try:
+                    h24 = int(parts[0])
+                    valid_nums.add(float(h24))
+                    valid_nums.add(float(h24 % 12 or 12))
+                except ValueError:
+                    pass
+        if "rain_max" in bw:
+            valid_nums.add(float(bw["rain_max"]))
 
-    # Avoid window
+    # Avoid window: start, end (24h and 12h), and rain_max
     aw = facts.get("avoid_window")
     if aw:
-        for r in aw.get("rows", []):
-            t_str = r["time"]
+        for t_str in (aw.get("start", ""), aw.get("end", "")):
             if ":" in t_str:
                 parts = t_str.split(":")
-                for p in parts:
-                    try:
-                        valid_nums.add(float(int(p)))
-                    except ValueError:
-                        pass
-            rain_val = float(r["rain"])
-            valid_nums.add(rain_val)
+                try:
+                    h24 = int(parts[0])
+                    valid_nums.add(float(h24))
+                    valid_nums.add(float(h24 % 12 or 12))
+                except ValueError:
+                    pass
+        if "rain_max" in aw:
+            valid_nums.add(float(aw["rain_max"]))
 
-    # Heat hours
+    # Heat hours: 32.0 and hours (24h and 12h)
     if facts.get("has_heat_hours"):
         valid_nums.add(32.0)
         for h in facts.get("heat_hours", []):
             if ":" in h:
                 parts = h.split(":")
-                for p in parts:
-                    try:
-                        valid_nums.add(float(int(p)))
-                    except ValueError:
-                        pass
+                try:
+                    h24 = int(parts[0])
+                    valid_nums.add(float(h24))
+                    valid_nums.add(float(h24 % 12 or 12))
+                except ValueError:
+                    pass
 
     return valid_nums
 
@@ -281,6 +283,13 @@ def validate_plan_output(text: str, facts: dict) -> tuple[bool, str]:
     if not stripped:
         return False, "Response is empty."
 
+    # Voice-friendly requirement: No 24-hour colon time formats (like 16:00)
+    if re.search(r"\b\d{1,2}:\d{2}\b", stripped):
+        return (
+            False,
+            "Found 24-hour time format with colon (use voice-friendly format like '4 pm' instead of '16:00').",
+        )
+
     # Constraint (b): Never says "will rain"
     if "will rain" in stripped.lower():
         return False, "Forbidden phrase 'will rain' detected."
@@ -289,6 +298,11 @@ def validate_plan_output(text: str, facts: dict) -> tuple[bool, str]:
     sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", stripped) if s.strip()]
     if len(sentences) not in (2, 3):
         return False, f"Sentence count is {len(sentences)}, expected 2 to 3 sentences."
+
+    # Word count: about 40 words max
+    words = re.findall(r"\b[A-Za-z0-9]+(?:'[a-z]+)?\b", stripped)
+    if len(words) > 55:
+        return False, f"Word count is {len(words)}, expected about 40 words max."
 
     # Constraint (d): Reject sentence fragments
     for s in sentences:
@@ -306,6 +320,23 @@ def validate_plan_output(text: str, facts: dict) -> tuple[bool, str]:
         except ValueError:
             pass
 
+    # Constraint (f): Must address the avoid window if one exists
+    aw = facts.get("avoid_window")
+    if aw:
+        avoid_start_hr = aw["start"].split(":")[0]
+        try:
+            avoid_start_12h = str(int(avoid_start_hr) % 12 or 12)
+        except ValueError:
+            avoid_start_12h = avoid_start_hr
+        lower_text = stripped.lower()
+        has_avoid_term = (
+            "avoid" in lower_text
+            or avoid_start_hr in found_nums
+            or avoid_start_12h in found_nums
+        )
+        if not has_avoid_term:
+            return False, "Failed to address the window to avoid."
+
     # Constraint (a): Every number in text must come from facts block
     valid_nums = extract_fact_numbers(facts)
     for num_str in found_nums:
@@ -316,54 +347,39 @@ def validate_plan_output(text: str, facts: dict) -> tuple[bool, str]:
         except ValueError:
             pass
 
-    # Constraint (f): Must address the avoid window if one exists
-    aw = facts.get("avoid_window")
-    if aw:
-        avoid_start_hr = aw["start"].split(":")[0]
-        # Text must mention "avoid" or reference the avoid start hour
-        lower_text = stripped.lower()
-        has_avoid_term = "avoid" in lower_text or avoid_start_hr in found_nums
-        if not has_avoid_term:
-            return False, "Failed to address the window to avoid."
-
     return True, "Valid"
 
 
 def generate_fallback_template(facts: dict, activity: str = "a walk") -> str:
     """
-    Generate a deterministic, 2-sentence plan directly from facts.
+    Generate a deterministic, 2-sentence voice-friendly plan directly from facts.
     Guaranteed to pass all guard rules.
     """
     bw = facts.get("best_window")
     aw = facts.get("avoid_window")
 
     if not bw:
-        return f"A good time for {activity} cannot be determined due to missing forecast data. Stay prepared for changing weather conditions."
+        return (
+            f"A good time for {activity} cannot be determined due to missing forecast data. "
+            "Please check conditions before heading out."
+        )
 
-    if bw["rain_min"] == bw["rain_max"]:
-        rain_str = f"{bw['rain_min']}%"
-    else:
-        rain_str = f"{bw['rain_min']}% to {bw['rain_max']}%"
+    bw_start = format_hour_12h(bw["start"])
+    bw_end = format_hour_12h(bw["end"])
+    bw_rain_max = bw["rain_max"]
 
-    if bw["temp_min"] == bw["temp_max"]:
-        temp_str = f"{bw['temp_min']:.1f}°C"
-    else:
-        temp_str = f"{bw['temp_min']:.1f}°C to {bw['temp_max']:.1f}°C"
-
-    sentence1 = (
-        f"The best time for {activity} is between {bw['start']} and {bw['end']} with a {rain_str} chance of rain "
-        f"and temperatures from {temp_str}."
-    )
+    sentence1 = f"The best time for {activity} is between {bw_start} and {bw_end} with at most {bw_rain_max}% chance of rain."
 
     if aw:
-        if aw["rain_min"] == aw["rain_max"]:
-            avoid_rain = f"{aw['rain_min']}%"
-        else:
-            avoid_rain = f"{aw['rain_min']}% to {aw['rain_max']}%"
-        sentence2 = f"Avoid being outside between {aw['start']} and {aw['end']} due to a {avoid_rain} chance of rain."
+        aw_start = format_hour_12h(aw["start"])
+        aw_end = format_hour_12h(aw["end"])
+        aw_rain = aw["rain_max"]
+        sentence2 = f"Avoid being outside between {aw_start} and {aw_end} due to a {aw_rain}% chance of rain."
     elif facts.get("has_heat_hours"):
-        heat_str = ", ".join(facts["heat_hours"])
-        sentence2 = f"Avoid being outside during peak heat hours at {heat_str}."
+        heat_strs = [format_hour_12h(h) for h in facts["heat_hours"]]
+        sentence2 = (
+            f"Avoid being outside during peak heat around {', '.join(heat_strs)}."
+        )
     else:
         sentence2 = (
             "Conditions remain mild and manageable throughout the rest of the day."

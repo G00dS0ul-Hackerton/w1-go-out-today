@@ -14,6 +14,7 @@ from w1_go_out_today.forecast import (
     train_and_evaluate,
 )
 from w1_go_out_today.plan import get_outdoor_plan
+from w1_go_out_today.voice import generate_voice
 
 load_dotenv()
 
@@ -112,6 +113,16 @@ def main() -> None:
         default="a walk",
         help="Outdoor activity to plan for (default: 'a walk')",
     )
+    parser.add_argument(
+        "--no-voice",
+        action="store_true",
+        help="Skip voice generation with ElevenLabs",
+    )
+    parser.add_argument(
+        "--play",
+        action="store_true",
+        help="Open/play the audio file after generating",
+    )
 
     args = parser.parse_args()
 
@@ -157,6 +168,10 @@ def main() -> None:
     print(f"\n--- Outdoor Plan ({args.activity}) ---")
     plan_text = get_outdoor_plan(fcst, activity=args.activity)
     print(plan_text)
+
+    # Generate voice with ElevenLabs (M5)
+    print()
+    generate_voice(plan_text, no_voice=args.no_voice, play=args.play)
 
 
 if __name__ == "__main__":

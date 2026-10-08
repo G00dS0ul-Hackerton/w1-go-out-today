@@ -109,6 +109,7 @@ def test_prompt_file_constraints():
     assert "chance of rain" in prompt_text
     assert "will rain" in prompt_text
     assert "2 to 3" in prompt_text
+    assert "12-hour" in prompt_text or "4 pm" in prompt_text
 
 
 def test_compute_forecast_facts(sample_forecast_df):
@@ -120,8 +121,6 @@ def test_compute_forecast_facts(sample_forecast_df):
     assert bw["end"] == "18:00"
     assert bw["rain_min"] == 15
     assert bw["rain_max"] == 37
-    assert bw["temp_min"] == 26.2
-    assert bw["temp_max"] == 26.9
 
     aw = facts["avoid_window"]
     assert aw is not None
@@ -132,24 +131,24 @@ def test_compute_forecast_facts(sample_forecast_df):
     assert aw["rain_max"] == 81
 
     assert facts["has_heat_hours"] is False
-    assert "16:00 to 18:00" in facts["facts_block"]
-    assert "10:00 to 14:00" in facts["facts_block"]
+    assert "4 pm to 6 pm" in facts["facts_block"]
+    assert "10 am to 2 pm" in facts["facts_block"]
 
 
 def test_extract_fact_numbers(sample_forecast_df):
     facts = compute_forecast_facts(sample_forecast_df)
     valid_nums = extract_fact_numbers(facts)
-    # Best window numbers
+    # Best window numbers: 16:00 maps to 16.0 and 4.0; 18:00 maps to 18.0 and 6.0; rain_max is 37.0
     assert 16.0 in valid_nums
+    assert 4.0 in valid_nums
     assert 18.0 in valid_nums
-    assert 15.0 in valid_nums
+    assert 6.0 in valid_nums
     assert 37.0 in valid_nums
-    assert 26.2 in valid_nums
-    assert 26.9 in valid_nums
-    # Avoid window numbers
+    assert 15.0 not in valid_nums
+    # Avoid window numbers: 10:00 maps to 10.0; 14:00 maps to 14.0 and 2.0
     assert 10.0 in valid_nums
     assert 14.0 in valid_nums
-    assert 72.0 in valid_nums
+    assert 2.0 in valid_nums
     assert 81.0 in valid_nums
     # 32°C threshold must NOT be in valid numbers when no heat hours exist
     assert 32.0 not in valid_nums
@@ -157,21 +156,21 @@ def test_extract_fact_numbers(sample_forecast_df):
 
 def test_sentence_fragments():
     # Fragment from coder Run 1 (missing verb in first clause)
-    fragment = "Between 07:00 and 08:00, the best time to go for a walk."
+    fragment = "Between 7 am and 8 am, the best time to go for a walk."
     assert is_sentence_fragment(fragment) is True
 
     # Complete grammatical sentence
     complete = (
-        "The best time for a walk is between 16:00 and 18:00 with low rain chances."
+        "The best time for a walk is between 4 pm and 6 pm with low rain chances."
     )
     assert is_sentence_fragment(complete) is False
 
 
 def test_coder_run_6_fails_guard(sample_forecast_df):
     facts = compute_forecast_facts(sample_forecast_df)
-    # Coder Run 6 output: "coolest at 26.2°C", completely omitted avoid window
+    # Avoid window omitted
     coder_run_6 = (
-        "Between 17:00 and 18:00, the chance of rain is the lowest at 15%. "
+        "Between 5 pm and 6 pm, the chance of rain is the lowest at 15%. "
         "The temperature is also the coolest at 26.2°C, making it a comfortable time for a walk."
     )
     is_valid, msg = validate_plan_output(coder_run_6, facts)
@@ -181,9 +180,9 @@ def test_coder_run_6_fails_guard(sample_forecast_df):
 
 def test_coder_run_3_fails_guard(sample_forecast_df):
     facts = compute_forecast_facts(sample_forecast_df)
-    # Coder Run 3 output: mixed hours, omitted avoid window
+    # Avoid window omitted
     coder_run_3 = (
-        "Between 17:00 and 18:00, the chance of rain is only 15%, making it a good time for a walk. "
+        "Between 5 pm and 6 pm, the chance of rain is only 15%, making it a good time for a walk. "
         "The temperature is 26.5°C, which is not too hot."
     )
     is_valid, msg = validate_plan_output(coder_run_3, facts)
@@ -195,7 +194,7 @@ def test_reject_32_when_no_heat_hours(sample_forecast_df):
     facts = compute_forecast_facts(sample_forecast_df)
     assert facts["has_heat_hours"] is False
     text = (
-        "The best time for a walk is between 16:00 and 18:00 with a 15% chance of rain. "
+        "The best time for a walk is between 4 pm and 6 pm with at most a 37% chance of rain. "
         "Temperatures remain below 32°C so you can avoid midday rain."
     )
     is_valid, msg = validate_plan_output(text, facts)
@@ -206,12 +205,33 @@ def test_reject_32_when_no_heat_hours(sample_forecast_df):
 def test_valid_plan_passes_guard(sample_forecast_df):
     facts = compute_forecast_facts(sample_forecast_df)
     valid_text = (
-        "The best time for a walk is between 16:00 and 18:00 with a 15% to 37% chance of rain "
-        "and temperatures from 26.2°C to 26.9°C. "
-        "You should avoid being outside between 10:00 and 14:00 due to a 72% to 81% chance of rain."
+        "The best time for a walk is between 4 pm and 6 pm with at most a 37% chance of rain. "
+        "You should avoid being outside between 10 am and 2 pm due to an 81% chance of rain."
     )
     is_valid, msg = validate_plan_output(valid_text, facts)
     assert is_valid is True, msg
+
+
+def test_guard_rejects_24h_time(sample_forecast_df):
+    facts = compute_forecast_facts(sample_forecast_df)
+    text = (
+        "The best time for a walk is between 16:00 and 18:00 with at most a 37% chance of rain. "
+        "Avoid being outside from 10:00 to 14:00."
+    )
+    is_valid, msg = validate_plan_output(text, facts)
+    assert is_valid is False
+    assert "24-hour time format" in msg
+
+
+def test_guard_rejects_too_many_words(sample_forecast_df):
+    facts = compute_forecast_facts(sample_forecast_df)
+    long_text = (
+        "The best time for a walk is between 4 pm and 6 pm with at most a 37% chance of rain because the weather is very pleasant outside. "
+        "However, please make sure you avoid being outside between 10 am and 2 pm due to an 81% chance of heavy rain, thunder, and lightning across the entire Lagos metropolitan area today so you do not get completely soaked."
+    )
+    is_valid, msg = validate_plan_output(long_text, facts)
+    assert is_valid is False
+    assert "Word count" in msg
 
 
 def test_fallback_template_passes_guard(sample_forecast_df):
@@ -219,13 +239,15 @@ def test_fallback_template_passes_guard(sample_forecast_df):
     fallback = generate_fallback_template(facts, activity="a walk")
     is_valid, msg = validate_plan_output(fallback, facts)
     assert is_valid is True, f"Fallback failed guard: {msg}"
-    assert "16:00" in fallback
-    assert "18:00" in fallback
-    assert "10:00" in fallback
-    assert "14:00" in fallback
+    assert "4 pm" in fallback
+    assert "6 pm" in fallback
+    assert "10 am" in fallback
+    assert "2 pm" in fallback
     assert "chance of rain" in fallback
     assert "will rain" not in fallback.lower()
     assert count_sentences(fallback) == 2
+    words = len(fallback.split())
+    assert words <= 50
 
 
 class MockHTTPResponse:
@@ -306,3 +328,25 @@ def test_get_outdoor_plan_retries_and_falls_back(sample_forecast_df, monkeypatch
     facts = compute_forecast_facts(sample_forecast_df)
     is_valid, msg = validate_plan_output(plan, facts)
     assert is_valid is True, f"Should have fallen back to valid template: {msg}"
+
+
+def test_best_window_uses_highest_rain_chance(sample_forecast_df):
+    facts = compute_forecast_facts(sample_forecast_df, activity="a walk")
+    # Best window rain ranges 15% to 37%. Must use highest: at most 37%
+    assert "at most 37%" in facts["facts_block"]
+    fallback = generate_fallback_template(facts, activity="a walk")
+    assert "at most 37%" in fallback
+    assert "15%" not in fallback
+    is_valid, msg = validate_plan_output(fallback, facts)
+    assert is_valid is True, f"Fallback failed guard: {msg}"
+
+
+def test_guard_rejects_best_window_understated_rain(sample_forecast_df):
+    facts = compute_forecast_facts(sample_forecast_df)
+    understated_text = (
+        "The best time for a walk is between 4 pm and 6 pm with only a 15% chance of rain. "
+        "You should avoid being outside between 10 am and 2 pm due to an 81% chance of rain."
+    )
+    is_valid, msg = validate_plan_output(understated_text, facts)
+    assert is_valid is False
+    assert "15" in msg

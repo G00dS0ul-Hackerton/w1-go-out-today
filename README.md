@@ -8,13 +8,16 @@ A local, voice-first morning brief that tells people in Lagos the best time toda
 This repository is managed with `uv` (Python 3.12), and includes `pytest` and `ruff`.
 
 Copy `.env.example` to `.env` and configure your settings:
+- `ELEVENLABS_API_KEY`: Your ElevenLabs API key (required for audio generation).
+- `ELEVENLABS_VOICE_ID`: Voice ID (default: `JBFqnCBsd6RMkjVDRZzb` - George).
+- `ELEVENLABS_MODEL_ID`: Model ID (default: `eleven_flash_v2_5` - 0.5 credits/char on free tier).
 - `TABPFN_TOKEN`: Your TabPFN token (required on Windows to avoid browser prompt).
 - `OLLAMA_BASE_URL`: Ollama API endpoint (default: `http://localhost:11434`).
-- `OLLAMA_MODEL`: Chosen Ollama model (default: `qwen2.5:7b`).
+- `OLLAMA_MODEL`: Chosen Ollama model (default: `qwen2.5-coder:7b`).
 
-## Morning Brief (Forecast + Outdoor Plan)
+## Morning Brief (Forecast + Outdoor Plan + Audio)
 
-To generate the 12-hour forecast table and plain-language outdoor plan:
+To generate the 12-hour forecast table, plain-language outdoor plan, and audio brief:
 ```bash
 uv run w1-go-out-today
 ```
@@ -22,14 +25,27 @@ uv run w1-go-out-today
 Options:
 - `--activity <activity>`: Custom outdoor activity (default: `"a walk"`), e.g. `--activity "run"` or `--activity "errands"`.
 - `--issue-time <timestamp>`: Specify forecast issue time (default: latest 06:00 in historical dataset), e.g. `--issue-time "2026-09-30 06:00"`.
+- `--no-voice`: Skip ElevenLabs voice generation and print text only.
+- `--play`: Open/play the generated audio file after generation (uses `os.startfile` on Windows).
+
+### Voice by ElevenLabs
+
+Voice generation is provided by ElevenLabs.
+- Uses `eleven_flash_v2_5` by default for ultra-low latency and minimal credit cost (0.5 credits per character on free plans).
+- Spoken text is formatted for natural listening: 12-hour conversational times (e.g. "4 pm"), concise sentences (~40 words total), and at most one weather number per window.
+- Audio is cached locally by SHA-256 hash of `text + voice_id + model_id` under `audio/brief_<hash>.mp3`. The same text is never generated twice.
+- Word timing alignments are saved to `audio/brief_<hash>.json` via the with-timestamps endpoint for synchronized captions.
+- If `ELEVENLABS_API_KEY` is missing or an API error occurs (quota, rate limit, timeout, or network issue), the plan text is still printed and audio is skipped with a one-line notice.
+- Audio files under `audio/` are strictly excluded from git tracking.
 
 ### Prompt & Guard
 
 The prompt template lives in [`prompts/plan.txt`](prompts/plan.txt). The model response is checked by an automated output guard ensuring:
-1. Every numerical value mentioned appears in the forecast.
+1. Every numerical value mentioned maps to the forecast facts (including 12-hour times like "4 pm" = 16:00).
 2. The phrase "will rain" is never used ("chance of rain" is enforced).
-3. The response is strictly 2 to 3 sentences long.
-If the guard fails, it retries once with the model before falling back to a deterministic template.
+3. The response is strictly 2 to 3 sentences long and about 40 words max.
+4. No 24-hour colon time formats (like `16:00`) are used in speech.
+If the guard fails, it retries once with the model before falling back to a deterministic voice-friendly template.
 
 ## Data Processing
 
