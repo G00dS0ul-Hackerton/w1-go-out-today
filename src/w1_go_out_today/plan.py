@@ -1,7 +1,6 @@
 import json
 import os
 import re
-import sys
 import urllib.error
 import urllib.request
 
@@ -13,6 +12,25 @@ load_dotenv()
 DEFAULT_PROMPT_PATH = "prompts/plan.txt"
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_OLLAMA_MODEL = "qwen2.5-coder:7b"
+
+ACTIVITY_GRAMMAR = {
+    "a walk": "for a walk",
+    "a run": "for a run",
+    "football": "to play football",
+    "market": "to go to the market",
+    "dry clothes": "to dry your clothes",
+    "commute": "to commute",
+    "picnic": "for a picnic",
+    "hangout": "to hang out",
+}
+
+
+class OllamaConnectionError(Exception):
+    """Raised when Ollama cannot be reached (not running, network error)."""
+
+
+class OllamaModelError(Exception):
+    """Raised when the requested model is not available in Ollama."""
 
 
 def load_prompt(prompt_path: str = DEFAULT_PROMPT_PATH) -> str:
@@ -146,9 +164,10 @@ def compute_forecast_facts(fcst_df: pd.DataFrame, activity: str = "a walk") -> d
     has_heat_hours = len(heat_hours) > 0
 
     # Build voice-friendly facts block text (12-hour format, <=1 number per window)
+    activity_phrase = ACTIVITY_GRAMMAR.get(activity, f"for {activity}")
     bw_start_12 = format_hour_12h(best_start)
     bw_end_12 = format_hour_12h(best_end)
-    best_desc = f"- Best window for {activity}: {bw_start_12} to {bw_end_12} (chance of rain: at most {best_rain_max}%)"
+    best_desc = f"- Best window {activity_phrase}: {bw_start_12} to {bw_end_12} (chance of rain: at most {best_rain_max}%)"
 
     if avoid_window:
         aw_start_12 = format_hour_12h(avoid_start)
@@ -162,6 +181,10 @@ def compute_forecast_facts(fcst_df: pd.DataFrame, activity: str = "a walk") -> d
         heat_desc = f"- Heat hours (>=32°C): {', '.join(heat_hours_12)}"
     else:
         heat_desc = "- Heat hours (>=32°C): None"
+
+    # Overall peak rain across ALL hours (for truthful range claims)
+    overall_peak_rain = max(p["rain"] for p in parsed)
+    overall_peak_hour = max(parsed, key=lambda p: p["rain"])
 
     # 4. Activity-specific facts for dry clothes
     dry_clothes_info = None
@@ -207,7 +230,35 @@ def compute_forecast_facts(fcst_df: pd.DataFrame, activity: str = "a walk") -> d
             ti_12 = format_hour_12h(take_in_time)
             dry_desc += f", take in by {ti_12}"
 
-    facts_block = f"{best_desc}\n{avoid_desc}\n{heat_desc}{dry_desc}".strip()
+    # 5. Activity-specific facts for commute
+    commute_info = None
+    commute_desc = ""
+    if "commute" in activity.lower():
+        # Best departure: earliest hour with rain <= 30%
+        low_rain_hours = [p for p in parsed if p["rain"] <= 30]
+        if low_rain_hours:
+            best_departure = low_rain_hours[0]
+        else:
+            best_departure = min(parsed, key=lambda p: p["rain"])
+        # Umbrella advisory: any hour with rain >= 40%
+        umbrella_hours = [p for p in parsed if p["rain"] >= 40]
+        umbrella_time = umbrella_hours[0] if umbrella_hours else None
+
+        commute_info = {
+            "departure": best_departure["time"],
+            "departure_rain": best_departure["rain"],
+            "umbrella_time": umbrella_time["time"] if umbrella_time else None,
+            "umbrella_rain": umbrella_time["rain"] if umbrella_time else None,
+        }
+        dep_12 = format_hour_12h(best_departure["time"])
+        commute_desc = f"\n- Best departure time: {dep_12} (chance of rain: {best_departure['rain']}%)"
+        if umbrella_time:
+            umb_12 = format_hour_12h(umbrella_time["time"])
+            commute_desc += f"\n- Carry umbrella after: {umb_12} (chance of rain rises to {umbrella_time['rain']}%)"
+
+    facts_block = (
+        f"{best_desc}\n{avoid_desc}\n{heat_desc}{dry_desc}{commute_desc}".strip()
+    )
 
     return {
         "best_window": best_window,
@@ -215,6 +266,10 @@ def compute_forecast_facts(fcst_df: pd.DataFrame, activity: str = "a walk") -> d
         "heat_hours": heat_hours,
         "has_heat_hours": has_heat_hours,
         "dry_clothes": dry_clothes_info,
+        "commute": commute_info,
+        "overall_peak_rain": overall_peak_rain,
+        "overall_peak_time": overall_peak_hour["time"],
+        "parsed_hours": parsed,
         "facts_block": facts_block,
     }
 
@@ -289,6 +344,39 @@ def extract_fact_numbers(facts: dict) -> set[float]:
                 except ValueError:
                     pass
 
+    # Overall peak rain
+    if "overall_peak_rain" in facts:
+        valid_nums.add(float(facts["overall_peak_rain"]))
+    if "overall_peak_time" in facts and ":" in facts["overall_peak_time"]:
+        try:
+            h24 = int(facts["overall_peak_time"].split(":")[0])
+            valid_nums.add(float(h24))
+            valid_nums.add(float(h24 % 12 or 12))
+        except ValueError:
+            pass
+
+    # Commute info
+    cm = facts.get("commute")
+    if cm:
+        if "departure" in cm and ":" in cm["departure"]:
+            try:
+                h24 = int(cm["departure"].split(":")[0])
+                valid_nums.add(float(h24))
+                valid_nums.add(float(h24 % 12 or 12))
+            except ValueError:
+                pass
+        if "departure_rain" in cm:
+            valid_nums.add(float(cm["departure_rain"]))
+        if cm.get("umbrella_time") and ":" in cm["umbrella_time"]:
+            try:
+                h24 = int(cm["umbrella_time"].split(":")[0])
+                valid_nums.add(float(h24))
+                valid_nums.add(float(h24 % 12 or 12))
+            except ValueError:
+                pass
+        if cm.get("umbrella_rain") is not None:
+            valid_nums.add(float(cm["umbrella_rain"]))
+
     return valid_nums
 
 
@@ -328,7 +416,8 @@ def is_sentence_fragment(sentence: str) -> bool:
         r"would|should|may|might|must|reach|reaches|reached|stay|stays|stayed|start|"
         r"starts|started|fall|falls|fell|rise|rises|rose|make|makes|made|avoid|avoids|"
         r"avoided|expect|expects|expected|provide|provides|provided|offer|offers|offered|"
-        r"bring|brings|brought|head|heads|run|runs|ran|walk|walks|walked|hang|hangs|hung|dry|dries|dried)\b"
+        r"bring|brings|brought|head|heads|run|runs|ran|walk|walks|walked|hang|hangs|hung|"
+        r"dry|dries|dried|peak|peaks|peaked|carry|carries|carried|leave|leaves|left)\b"
     )
     return not bool(re.search(verb_pattern, s_clean, re.IGNORECASE))
 
@@ -417,6 +506,35 @@ def validate_plan_output(text: str, facts: dict) -> tuple[bool, str]:
                 f"Unsubstantiated whole-day claim '{phrase}' detected; name specific windows instead.",
             )
 
+    # Constraint (h): Reject false range claims ("under X%" / "at most X%"
+    # followed by broad scope like "through the forecast window")
+    overall_peak = facts.get("overall_peak_rain", 0)
+    range_claim_patterns = [
+        (r"under\s+(\d+)%", "under"),
+        (r"at most\s+(?:a\s+)?(\d+)%", "at most"),
+    ]
+    broad_scope_phrases = [
+        "through the forecast",
+        "through the day",
+        "for the forecast",
+        "across the forecast",
+        "throughout",
+    ]
+    for pattern, label in range_claim_patterns:
+        for m in re.finditer(pattern, lower_text):
+            claimed = int(m.group(1))
+            # Check if followed by a broad scope phrase within 40 chars
+            after = lower_text[m.end() : m.end() + 40]
+            for scope_phrase in broad_scope_phrases:
+                if scope_phrase in after and claimed < overall_peak:
+                    return (
+                        False,
+                        (
+                            f"False range claim: '{label} {claimed}%' does not hold for all hours "
+                            f"(peak is {overall_peak}%)."
+                        ),
+                    )
+
     # Constraint (a): Every number in text must come from facts block
     valid_nums = extract_fact_numbers(facts)
     for num_str in found_nums:
@@ -437,10 +555,11 @@ def generate_fallback_template(facts: dict, activity: str = "a walk") -> str:
     """
     bw = facts.get("best_window")
     aw = facts.get("avoid_window")
+    activity_phrase = ACTIVITY_GRAMMAR.get(activity, f"for {activity}")
 
     if not bw:
         return (
-            f"A good time for {activity} cannot be determined due to missing forecast data. "
+            f"A good time {activity_phrase} cannot be determined due to missing forecast data. "
             "Please check conditions before heading out."
         )
 
@@ -453,27 +572,45 @@ def generate_fallback_template(facts: dict, activity: str = "a walk") -> str:
         dc_start = format_hour_12h(dc["start"])
         dc_end = format_hour_12h(dc["end"])
         dc_rain = dc["rain_max"]
-        sentence1 = f"Hang your clothes out between {dc_start} and {dc_end} with at most {dc_rain}% chance of rain."
+        sentence1 = f"The best time to dry your clothes is between {dc_start} and {dc_end} with at most {dc_rain}% chance of rain."
         if aw and dc.get("take_in_time"):
             ti_12 = format_hour_12h(dc["take_in_time"])
-            sentence2 = (
-                f"Bring them inside by {ti_12} to avoid rain chances rising later."
-            )
+            sentence2 = f"Hang your clothes out and bring them inside by {ti_12} to avoid rain chances rising later."
         elif aw:
             aw_start = format_hour_12h(aw["start"])
             aw_end = format_hour_12h(aw["end"])
             aw_rain = aw["rain_max"]
-            sentence2 = f"Avoid leaving clothes outside between {aw_start} and {aw_end} due to a {aw_rain}% chance of rain."
+            sentence2 = f"Hang your clothes out and avoid leaving them outside between {aw_start} and {aw_end} due to a {aw_rain}% chance of rain."
         elif dc.get("take_in_time"):
             ti_12 = format_hour_12h(dc["take_in_time"])
-            sentence2 = f"Bring them inside by {ti_12} before rain chances rise."
+            sentence2 = f"Hang your clothes out and bring them inside by {ti_12} before rain chances rise."
         else:
-            sentence2 = (
-                f"Conditions remain suitable with low rain risk around {dc_rain}%."
-            )
+            overall_peak = facts.get("overall_peak_rain", dc_rain)
+            peak_time_12h = format_hour_12h(facts.get("overall_peak_time", dc["end"]))
+            sentence2 = f"Hang your clothes out, as rain chances peak at {overall_peak}% around {peak_time_12h} outside this window."
         return f"{sentence1} {sentence2}"
 
-    sentence1 = f"The best time for {activity} is between {bw_start} and {bw_end} with at most {bw_rain_max}% chance of rain."
+    if "commute" in activity.lower() and facts.get("commute"):
+        cm = facts["commute"]
+        dep_12 = format_hour_12h(cm["departure"])
+        dep_rain = cm["departure_rain"]
+        sentence1 = f"The best time to commute is around {dep_12} with at most {dep_rain}% chance of rain."
+        if aw:
+            aw_start = format_hour_12h(aw["start"])
+            aw_end = format_hour_12h(aw["end"])
+            aw_rain = aw["rain_max"]
+            sentence2 = f"Carry an umbrella and avoid travelling between {aw_start} and {aw_end} due to a {aw_rain}% chance of rain."
+        elif cm.get("umbrella_time"):
+            umb_12 = format_hour_12h(cm["umbrella_time"])
+            umb_rain = cm["umbrella_rain"]
+            sentence2 = f"Carry an umbrella if heading out after {umb_12} when chances rise to {umb_rain}%."
+        else:
+            overall_peak = facts.get("overall_peak_rain", dep_rain)
+            peak_time_12h = format_hour_12h(facts.get("overall_peak_time", bw["end"]))
+            sentence2 = f"Outside this window, rain chances peak at {overall_peak}% around {peak_time_12h}."
+        return f"{sentence1} {sentence2}"
+
+    sentence1 = f"The best time {activity_phrase} is between {bw_start} and {bw_end} with at most {bw_rain_max}% chance of rain."
 
     if aw:
         aw_start = format_hour_12h(aw["start"])
@@ -486,9 +623,9 @@ def generate_fallback_template(facts: dict, activity: str = "a walk") -> str:
             f"Avoid being outside during peak heat around {', '.join(heat_strs)}."
         )
     else:
-        sentence2 = (
-            f"Rain chances stay low under {bw_rain_max}% through the forecast window."
-        )
+        overall_peak = facts.get("overall_peak_rain", bw_rain_max)
+        peak_time_12h = format_hour_12h(facts.get("overall_peak_time", bw["end"]))
+        sentence2 = f"Outside this window, rain chances peak at {overall_peak}% around {peak_time_12h}."
 
     return f"{sentence1} {sentence2}"
 
@@ -502,10 +639,7 @@ def call_ollama(
 ) -> str:
     """
     Call Ollama /api/generate endpoint.
-    Exits with a clean one-line message and non-zero exit code if:
-    - Ollama is not running (URLError)
-    - Model is not pulled (HTTPError 404 or missing model)
-    - Request times out (TimeoutError)
+    Raises OllamaConnectionError or OllamaModelError on failure.
     """
     if base_url is None:
         base_url = os.getenv("OLLAMA_BASE_URL", DEFAULT_OLLAMA_URL)
@@ -539,28 +673,26 @@ def call_ollama(
     except (TimeoutError, urllib.error.URLError) as e:
         if isinstance(e, urllib.error.HTTPError):
             if e.code == 404:
-                sys.stderr.write(
-                    f"Error: Model '{model}' is not pulled. Run: ollama pull {model}\n"
-                )
-                sys.exit(1)
-            sys.stderr.write(
-                f"Error: Ollama returned HTTP error {e.code}: {e.reason}\n"
-            )
-            sys.exit(1)
+                raise OllamaModelError(
+                    f"Model '{model}' is not pulled. Run: ollama pull {model}"
+                ) from e
+            raise OllamaConnectionError(
+                f"Ollama returned HTTP error {e.code}: {e.reason}"
+            ) from e
         elif isinstance(e, TimeoutError) or "timed out" in str(e).lower():
-            sys.stderr.write(f"Error: Ollama request timed out after {timeout}s.\n")
-            sys.exit(1)
+            raise OllamaConnectionError(
+                f"Ollama request timed out after {timeout}s"
+            ) from e
         else:
-            sys.stderr.write(
-                f"Error: Ollama is not running. Start Ollama and run: ollama pull {model}\n"
-            )
-            sys.exit(1)
+            raise OllamaConnectionError(
+                f"Ollama is not running. Start Ollama and run: ollama pull {model}"
+            ) from e
     except OSError as e:
         if "timed out" in str(e).lower():
-            sys.stderr.write(f"Error: Ollama request timed out after {timeout}s.\n")
-            sys.exit(1)
-        sys.stderr.write(f"Error communicating with Ollama: {e}\n")
-        sys.exit(1)
+            raise OllamaConnectionError(
+                f"Ollama request timed out after {timeout}s"
+            ) from e
+        raise OllamaConnectionError(f"Error communicating with Ollama: {e}") from e
 
 
 def get_outdoor_plan(

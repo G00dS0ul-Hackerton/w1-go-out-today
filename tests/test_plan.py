@@ -7,6 +7,9 @@ import pandas as pd
 import pytest
 
 from w1_go_out_today.plan import (
+    ACTIVITY_GRAMMAR,
+    OllamaConnectionError,
+    OllamaModelError,
     call_ollama,
     compute_forecast_facts,
     count_sentences,
@@ -275,21 +278,19 @@ def test_call_ollama_success(monkeypatch):
     assert res == "The morning is clear."
 
 
-def test_call_ollama_not_running(monkeypatch, capsys):
+def test_call_ollama_not_running(monkeypatch):
     def mock_urlopen_fail(req, timeout):
         raise urllib.error.URLError("Connection refused")
 
     monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen_fail)
 
-    with pytest.raises(SystemExit) as exc_info:
+    with pytest.raises(OllamaConnectionError) as exc_info:
         call_ollama("Test prompt", model="qwen2.5-coder:7b")
 
-    assert exc_info.value.code == 1
-    captured = capsys.readouterr()
-    assert "Ollama is not running" in captured.err
+    assert "Ollama is not running" in str(exc_info.value)
 
 
-def test_call_ollama_model_not_pulled(monkeypatch, capsys):
+def test_call_ollama_model_not_pulled(monkeypatch):
     def mock_urlopen_404(req, timeout):
         raise urllib.error.HTTPError(
             url="", code=404, msg="Not Found", hdrs={}, fp=None
@@ -297,26 +298,22 @@ def test_call_ollama_model_not_pulled(monkeypatch, capsys):
 
     monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen_404)
 
-    with pytest.raises(SystemExit) as exc_info:
+    with pytest.raises(OllamaModelError) as exc_info:
         call_ollama("Test prompt", model="unknown-model")
 
-    assert exc_info.value.code == 1
-    captured = capsys.readouterr()
-    assert "Model 'unknown-model' is not pulled" in captured.err
+    assert "not pulled" in str(exc_info.value)
 
 
-def test_call_ollama_timeout(monkeypatch, capsys):
+def test_call_ollama_timeout(monkeypatch):
     def mock_urlopen_timeout(req, timeout):
         raise TimeoutError("timed out")
 
     monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen_timeout)
 
-    with pytest.raises(SystemExit) as exc_info:
+    with pytest.raises(OllamaConnectionError) as exc_info:
         call_ollama("Test prompt", timeout=120)
 
-    assert exc_info.value.code == 1
-    captured = capsys.readouterr()
-    assert "timed out after 120s" in captured.err
+    assert "timed out" in str(exc_info.value)
 
 
 def test_get_outdoor_plan_retries_and_falls_back(sample_forecast_df, monkeypatch):
@@ -368,7 +365,7 @@ def test_picnic_and_hangout_activities(sample_forecast_df):
     for act in ("picnic", "hangout"):
         facts = compute_forecast_facts(sample_forecast_df, activity=act)
         template = generate_fallback_template(facts, activity=act)
-        assert act in template
+        assert ACTIVITY_GRAMMAR[act] in template
         is_valid, msg = validate_plan_output(template, facts)
         assert is_valid is True, f"Template for {act} failed guard: {msg}"
 
@@ -378,7 +375,7 @@ def test_fallback_no_filler_sentences(sample_forecast_df):
     facts = compute_forecast_facts(sample_forecast_df, activity="a walk")
     facts["avoid_window"] = None
     template = generate_fallback_template(facts, activity="a walk")
-    assert "Conditions remain mild" not in template
+    assert "Outside this window, rain chances peak" in template
 
 
 def test_validate_plan_output_rejects_whole_day_claim(sample_forecast_df):
@@ -405,6 +402,7 @@ def test_fallback_template_does_not_make_whole_day_claims(sample_forecast_df):
     template = generate_fallback_template(facts, activity="a walk")
     assert "throughout the rest of the day" not in template.lower()
     assert "all day" not in template.lower()
+    assert "Outside this window, rain chances peak at" in template
     is_valid, msg = validate_plan_output(template, facts)
     assert is_valid is True, f"Fallback template failed guard: {msg}"
 
@@ -416,3 +414,114 @@ def test_dry_clothes_uses_longest_dry_and_bring_in(sample_forecast_df):
     assert "throughout the rest of the day" not in template.lower()
     is_valid, msg = validate_plan_output(template, facts)
     assert is_valid is True, f"Dry clothes template failed guard: {msg}"
+
+
+def test_guard_rejects_false_range_claim():
+    """The exact false sentence from the old template must fail the guard."""
+    # Forecast where best window max is 34% but some hours are 45% and 50%
+    df = pd.DataFrame(
+        [
+            {
+                "time": "07:00",
+                "hours_ahead": 1,
+                "temp_pred": "25.0°C",
+                "rain_prob": "13%",
+            },
+            {
+                "time": "08:00",
+                "hours_ahead": 2,
+                "temp_pred": "25.6°C",
+                "rain_prob": "19%",
+            },
+            {
+                "time": "09:00",
+                "hours_ahead": 3,
+                "temp_pred": "26.3°C",
+                "rain_prob": "27%",
+            },
+            {
+                "time": "10:00",
+                "hours_ahead": 4,
+                "temp_pred": "26.9°C",
+                "rain_prob": "45%",
+            },
+            {
+                "time": "11:00",
+                "hours_ahead": 5,
+                "temp_pred": "27.4°C",
+                "rain_prob": "54%",
+            },
+            {
+                "time": "12:00",
+                "hours_ahead": 6,
+                "temp_pred": "27.6°C",
+                "rain_prob": "59%",
+            },
+            {
+                "time": "13:00",
+                "hours_ahead": 7,
+                "temp_pred": "27.7°C",
+                "rain_prob": "56%",
+            },
+            {
+                "time": "14:00",
+                "hours_ahead": 8,
+                "temp_pred": "27.6°C",
+                "rain_prob": "50%",
+            },
+            {
+                "time": "15:00",
+                "hours_ahead": 9,
+                "temp_pred": "27.5°C",
+                "rain_prob": "34%",
+            },
+            {
+                "time": "16:00",
+                "hours_ahead": 10,
+                "temp_pred": "27.3°C",
+                "rain_prob": "19%",
+            },
+            {
+                "time": "17:00",
+                "hours_ahead": 11,
+                "temp_pred": "26.9°C",
+                "rain_prob": "12%",
+            },
+            {
+                "time": "18:00",
+                "hours_ahead": 12,
+                "temp_pred": "26.5°C",
+                "rain_prob": "9%",
+            },
+        ]
+    )
+    facts = compute_forecast_facts(df, activity="a walk")
+    # This is the exact false sentence from the old template
+    false_sentence = (
+        "The best time for a walk is between 3 pm and 6 pm with at most 34% chance of rain. "
+        "Rain chances stay low under 34% through the forecast window."
+    )
+    is_valid, msg = validate_plan_output(false_sentence, facts)
+    assert is_valid is False, f"Should have rejected false range claim, got: {msg}"
+    assert "34%" in msg or "false range" in msg.lower() or "peak" in msg.lower()
+
+
+def test_fallback_template_uses_correct_grammar(sample_forecast_df):
+    for activity, expected_phrase in ACTIVITY_GRAMMAR.items():
+        facts = compute_forecast_facts(sample_forecast_df, activity=activity)
+        template = generate_fallback_template(facts, activity=activity)
+        assert expected_phrase in template, (
+            f"Expected '{expected_phrase}' in template for '{activity}', got: {template}"
+        )
+        is_valid, msg = validate_plan_output(template, facts)
+        assert is_valid is True, f"Template for '{activity}' failed guard: {msg}"
+
+
+def test_commute_template_mentions_departure_and_umbrella(sample_forecast_df):
+    facts = compute_forecast_facts(sample_forecast_df, activity="commute")
+    template = generate_fallback_template(facts, activity="commute")
+    assert "commute" in template.lower()
+    # Must mention departure time or umbrella
+    assert "am" in template.lower() or "pm" in template.lower()
+    is_valid, msg = validate_plan_output(template, facts)
+    assert is_valid is True, f"Commute template failed guard: {msg}"

@@ -6,6 +6,9 @@ import asyncio
 import csv
 import json
 import logging
+import os
+import urllib.request
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -17,7 +20,35 @@ from starlette.responses import StreamingResponse
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Go Out Today?")
+_demo_speed = False
+
+
+async def _warm_ollama():
+    """Send a short prompt to warm the Ollama model on startup."""
+    from w1_go_out_today.plan import (
+        DEFAULT_OLLAMA_MODEL,
+        OllamaConnectionError,
+        OllamaModelError,
+        call_ollama,
+    )
+
+    model = os.getenv("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
+    try:
+        await asyncio.to_thread(call_ollama, "hello", None, None, 120, "10m")
+        logger.info("Ollama model '%s' warmed successfully", model)
+    except (OllamaConnectionError, OllamaModelError) as exc:
+        logger.warning("Ollama warm failed: %s", exc)
+
+
+@asynccontextmanager
+async def lifespan(app):
+    task = asyncio.create_task(_warm_ollama())
+    _active_tasks.add(task)
+    task.add_done_callback(_active_tasks.discard)
+    yield
+
+
+app = FastAPI(title="Go Out Today?", lifespan=lifespan)
 
 STATIC_DIR = Path(__file__).parent / "static"
 AUDIO_DIR = Path("audio")
@@ -115,7 +146,11 @@ async def _run_pipeline(activity: str, request_id: str | None = None) -> None:
     """Run the full brief pipeline in the background, broadcasting SSE events."""
     import pandas as pd
 
-    from w1_go_out_today.plan import compute_forecast_facts
+    from w1_go_out_today.plan import (
+        OllamaConnectionError,
+        OllamaModelError,
+        compute_forecast_facts,
+    )
 
     _state["pipeline_running"] = True
     _state["current_activity"] = activity
@@ -177,6 +212,8 @@ async def _run_pipeline(activity: str, request_id: str | None = None) -> None:
         else:
             # Step 1: Fetch live weather
             await emit("progress", {"step": "reading_sky", "status": "running"})
+            if _demo_speed:
+                await asyncio.sleep(1.5)
             _state["current_step"] = "reading_sky"
 
             from w1_go_out_today.live_weather import fetch_live_weather
@@ -187,6 +224,8 @@ async def _run_pipeline(activity: str, request_id: str | None = None) -> None:
 
             # Step 2: TabPFN forecast
             await emit("progress", {"step": "tabpfn", "status": "running"})
+            if _demo_speed:
+                await asyncio.sleep(1.5)
             _state["current_step"] = "tabpfn"
 
             # Train on CSV
@@ -278,6 +317,8 @@ async def _run_pipeline(activity: str, request_id: str | None = None) -> None:
 
         # --- Step 3: Plan text ---------------------------------------------
         await emit("progress", {"step": "plan", "status": "running"})
+        if _demo_speed:
+            await asyncio.sleep(1.5)
         _state["current_step"] = "plan"
 
         fallback_note = None
@@ -294,22 +335,28 @@ async def _run_pipeline(activity: str, request_id: str | None = None) -> None:
                 120,
                 "10m",
             )
-        except SystemExit:
-            from w1_go_out_today.plan import (
-                generate_fallback_template,
-            )
+        except (OllamaConnectionError, OllamaModelError) as exc:
+            logger.warning("Ollama fallback: %s", exc)
+            from w1_go_out_today.plan import generate_fallback_template
 
             facts_for_fallback = compute_forecast_facts(fcst_df, activity=activity)
             plan_text = generate_fallback_template(
                 facts_for_fallback, activity=activity
             )
-            fallback_note = "Local model offline"
+            if isinstance(exc, OllamaModelError):
+                fallback_note = "Local model offline \u2014 model not pulled"
+            elif "timed out" in str(exc).lower():
+                fallback_note = "Local model offline \u2014 first load timed out"
+            else:
+                fallback_note = "Local model offline \u2014 Ollama is not running"
 
         _state["plan_ready"] = True
         await emit("progress", {"step": "plan", "status": "done"})
 
         # --- Step 4: Voice -------------------------------------------------
         await emit("progress", {"step": "voice", "status": "running"})
+        if _demo_speed:
+            await asyncio.sleep(1.5)
         _state["current_step"] = "voice"
 
         audio_file = None
@@ -383,6 +430,55 @@ async def get_status():
         "pipeline_running": _state["pipeline_running"],
         "current_step": _state["current_step"],
         "current_activity": _state["current_activity"],
+    }
+
+
+@app.get("/warm")
+async def warm_model():
+    task = asyncio.create_task(_warm_ollama())
+    _active_tasks.add(task)
+    task.add_done_callback(_active_tasks.discard)
+    return {"status": "warming"}
+
+
+def _ping_ollama_sync(endpoint: str, payload: bytes) -> bool:
+    req = urllib.request.Request(
+        endpoint, data=payload, headers={"Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=5):
+        return True
+
+
+@app.get("/health")
+async def health_check():
+    from w1_go_out_today.plan import DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL
+
+    ollama_ok = False
+    ollama_error = None
+    model = os.getenv("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
+    base_url = os.getenv("OLLAMA_BASE_URL", DEFAULT_OLLAMA_URL)
+    try:
+        endpoint = f"{base_url.rstrip('/')}/api/generate"
+        payload = json.dumps(
+            {
+                "model": model,
+                "prompt": "",
+                "stream": False,
+                "options": {"num_predict": 0},
+            }
+        ).encode()
+        await asyncio.to_thread(_ping_ollama_sync, endpoint, payload)
+        ollama_ok = True
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        ollama_error = str(exc)
+    return {
+        "status": "ok" if ollama_ok else "degraded",
+        "ollama": {
+            "status": "ok" if ollama_ok else "error",
+            "model": model,
+            "error": ollama_error,
+        },
+        "forecast_cached": bool(_state["forecast_cache"]),
     }
 
 

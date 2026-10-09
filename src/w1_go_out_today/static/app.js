@@ -90,8 +90,12 @@ document.addEventListener('DOMContentLoaded', () => {
             greeting.textContent = (hour >= 19 && hour < 22) ? 'Good evening, Lagos' : 'Good night, Lagos';
         }
 
-        // Evening banner
-        if (hour >= 18 || hour < 5) {
+        // Evening / morning pill
+        if (hour >= 18) {
+            eveningNote.textContent = "Tomorrow's brief builds at 05:45";
+            eveningNote.removeAttribute('hidden');
+        } else if (hour >= 5 && hour < 12) {
+            eveningNote.textContent = "Today's brief \u00b7 forecast from 06:00";
             eveningNote.removeAttribute('hidden');
         } else {
             eveningNote.setAttribute('hidden', '');
@@ -341,6 +345,9 @@ document.addEventListener('DOMContentLoaded', () => {
             updateChips(currentActivity);
             renderCharacter(currentActivity, currentRainProb);
             startBrief(currentActivity);
+
+    // Warm Ollama model on page open
+    fetch('/warm').catch(() => {});
         });
     });
 
@@ -507,6 +514,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     startBrief(currentActivity);
+
+    // Warm Ollama model on page open
+    fetch('/warm').catch(() => {});
 
 
     // -----------------------------------------------------------------------

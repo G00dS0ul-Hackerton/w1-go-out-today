@@ -13,7 +13,11 @@ from w1_go_out_today.forecast import (
     run_forecast_evaluation,
     train_and_evaluate,
 )
-from w1_go_out_today.plan import get_outdoor_plan
+from w1_go_out_today.plan import (
+    OllamaConnectionError,
+    OllamaModelError,
+    get_outdoor_plan,
+)
 from w1_go_out_today.voice import generate_voice
 
 load_dotenv()
@@ -133,15 +137,54 @@ def main() -> None:
         action="store_true",
         help="Pre-build the brief for instant playback and exit",
     )
+    parser.add_argument(
+        "--clear-cache",
+        action="store_true",
+        help="Wipe forecast, plan and audio cache for today, then exit",
+    )
+    parser.add_argument(
+        "--demo-speed",
+        action="store_true",
+        help="Show build steps for at least 1.5s each (for demo video recording only)",
+    )
 
     args = parser.parse_args()
+
+    if args.clear_cache:
+        import glob
+        from datetime import UTC, datetime
+        from pathlib import Path
+
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        deleted = []
+
+        # Forecast cache
+        for f in glob.glob(f"data/cache/forecast_{today}*.json"):
+            Path(f).unlink()
+            deleted.append(f)
+
+        # Audio cache (all cached briefs)
+        for pattern in ("audio/brief_*.mp3", "audio/brief_*.json"):
+            for f in glob.glob(pattern):
+                Path(f).unlink()
+                deleted.append(f)
+
+        if deleted:
+            print(f"Cleared {len(deleted)} cached files:")
+            for f in deleted:
+                print(f"  - {f}")
+        else:
+            print("No cache files found for today.")
+        return
 
     if args.serve:
         import uvicorn
 
-        from w1_go_out_today.server import app
+        import w1_go_out_today.server as _server
 
-        uvicorn.run(app, host="127.0.0.1", port=8000)
+        if args.demo_speed:
+            _server._demo_speed = True
+        uvicorn.run(_server.app, host="127.0.0.1", port=8000)
         return
 
     if args.prebuild:
@@ -232,7 +275,11 @@ def main() -> None:
 
     # Generate and print outdoor plan
     print(f"\n--- Outdoor Plan ({args.activity}) ---")
-    plan_text = get_outdoor_plan(fcst, activity=args.activity)
+    try:
+        plan_text = get_outdoor_plan(fcst, activity=args.activity)
+    except (OllamaConnectionError, OllamaModelError) as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        sys.exit(1)
     print(plan_text)
 
     # Generate voice with ElevenLabs (M5)

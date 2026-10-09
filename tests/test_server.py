@@ -112,3 +112,19 @@ def test_audio_endpoint(client, tmp_path, monkeypatch):
     res200 = client.get("/audio/test.mp3")
     assert res200.status_code == 200
     assert res200.content == b"fake audio data"
+
+
+def test_warm_endpoint(client):
+    response = client.get("/warm")
+    assert response.status_code == 200
+    assert response.json() == {"status": "warming"}
+
+
+def test_health_endpoint(client):
+    response = client.get("/health")
+    assert response.status_code == 200
+    data = response.json()
+    assert "status" in data
+    assert "ollama" in data
+    assert data["ollama"]["model"] == "qwen2.5-coder:7b"
+    assert "forecast_cached" in data
