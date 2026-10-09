@@ -9,3 +9,5 @@ audio/
 *.part
 data/outside_log.csv
 data/cache/
+sanitized_transcript.json
+scrub.py

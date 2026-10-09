@@ -230,10 +230,10 @@ async def _run_pipeline(activity: str, request_id: str | None = None) -> None:
 
             # Train on CSV
             from w1_go_out_today.forecast import (
+                fit_models,
                 forecast,
                 get_splits,
                 prepare_data,
-                train_and_evaluate,
             )
 
             csv_df = await asyncio.to_thread(
@@ -242,12 +242,8 @@ async def _run_pipeline(activity: str, request_id: str | None = None) -> None:
 
             if _state["trained_models"] is None:
                 df_pairs = await asyncio.to_thread(prepare_data, csv_df, 12, True)
-                df_train, df_test, df_pre_test = await asyncio.to_thread(
-                    get_splits, df_pairs, 3000
-                )
-                clf, reg, feats, *_ = await asyncio.to_thread(
-                    train_and_evaluate, df_train, df_test, df_pre_test, 2, True
-                )
+                df_train, *_ = await asyncio.to_thread(get_splits, df_pairs, 3000)
+                clf, reg, feats = await asyncio.to_thread(fit_models, df_train, 2)
                 _state["trained_models"] = {
                     "clf": clf,
                     "reg": reg,

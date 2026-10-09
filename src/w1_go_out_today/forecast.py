@@ -107,6 +107,36 @@ def build_climatology(df_pre_test):
     return clim
 
 
+def fit_models(df_train, n_estimators=2):
+    """Fit TabPFN classifier and regressor on training data without evaluating holdout metrics."""
+    features = [
+        "temperature_2m",
+        "relative_humidity_2m",
+        "dew_point_2m",
+        "precipitation",
+        "cloud_cover",
+        "pressure_msl",
+        "wind_speed_10m",
+        "press_diff_3h",
+        "hum_diff_3h",
+        "rain_last_3h",
+        "hours_ahead",
+        "target_hour",
+        "target_month",
+    ]
+
+    X_train = df_train[features]
+    y_train_temp = df_train["temp_target"]
+    y_train_rain = df_train["rain_target"]
+
+    clf = TabPFNClassifier(n_estimators=n_estimators)
+    clf.fit(X_train, y_train_rain)
+    reg = TabPFNRegressor(n_estimators=n_estimators)
+    reg.fit(X_train, y_train_temp)
+
+    return clf, reg, features
+
+
 def train_and_evaluate(df_train, df_test, df_pre_test, n_estimators=2, quiet=False):
     features = [
         "temperature_2m",

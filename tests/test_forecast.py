@@ -12,6 +12,7 @@ threadpoolctl.ThreadpoolController._find_libraries_on_windows = lambda self: Non
 
 from w1_go_out_today.forecast import (
     build_climatology,
+    fit_models,
     forecast,
     get_splits,
     prepare_data,
@@ -141,6 +142,29 @@ def test_train_and_evaluate(mock_tabpfn):
     assert clf is not None
     assert reg is not None
     assert len(feats) > 0
+
+
+def test_fit_models(mock_tabpfn):
+    times = pd.date_range("2023-01-01 00:00", periods=400 * 24, freq="h")
+    df = pd.DataFrame(
+        {
+            "time": times,
+            "temperature_2m": np.random.rand(len(times)),
+            "relative_humidity_2m": np.random.rand(len(times)),
+            "dew_point_2m": np.random.rand(len(times)),
+            "precipitation": np.random.rand(len(times)),
+            "cloud_cover": np.random.rand(len(times)),
+            "pressure_msl": np.random.rand(len(times)),
+            "wind_speed_10m": np.random.rand(len(times)),
+        }
+    )
+    df_pairs = prepare_data(df, n=2)
+    df_train, _, _ = get_splits(df_pairs)
+
+    clf, reg, feats = fit_models(df_train, n_estimators=2)
+    assert clf is not None
+    assert reg is not None
+    assert len(feats) == 13
 
 
 def test_forecast_latest_issue_time(mock_tabpfn):

@@ -7,11 +7,11 @@ import pandas as pd
 from dotenv import load_dotenv
 
 from w1_go_out_today.forecast import (
+    fit_models,
     forecast,
     get_splits,
     prepare_data,
     run_forecast_evaluation,
-    train_and_evaluate,
 )
 from w1_go_out_today.plan import (
     OllamaConnectionError,
@@ -207,10 +207,8 @@ def main() -> None:
         csv_df = pd.read_csv(csv_path)
         csv_df["time"] = pd.to_datetime(csv_df["time"])
         df_pairs = prepare_data(csv_df, n=12, is_training=True)
-        df_train, df_test, df_pre_test = get_splits(df_pairs, train_size=3000)
-        clf, reg, feats, *_ = train_and_evaluate(
-            df_train, df_test, df_pre_test, n_estimators=2, quiet=True
-        )
+        df_train, *_ = get_splits(df_pairs, train_size=3000)
+        clf, reg, feats = fit_models(df_train, n_estimators=2)
 
         fcst = forecast(live_df, issue_time, n=12, clf=clf, reg=reg, features=feats)
         facts = compute_forecast_facts(fcst, activity="a walk")
@@ -262,10 +260,8 @@ def main() -> None:
 
     # Train TabPFN on 3,000 training pairs
     df_pairs = prepare_data(df, n=12, is_training=True)
-    df_train, df_test, df_pre_test = get_splits(df_pairs, train_size=3000)
-    clf, reg, feats, _, _, _, _ = train_and_evaluate(
-        df_train, df_test, df_pre_test, n_estimators=2, quiet=True
-    )
+    df_train, *_ = get_splits(df_pairs, train_size=3000)
+    clf, reg, feats = fit_models(df_train, n_estimators=2)
 
     # Generate 12-hour forecast
     fcst = forecast(df, issue_time, n=12, clf=clf, reg=reg, features=feats)
